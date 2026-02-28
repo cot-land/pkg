@@ -1,0 +1,50 @@
+/// Package file storage — store and retrieve package source files on disk.
+///
+/// Ported from JSR api/src/gcs.rs (file storage, simplified to local disk).
+/// Stores published packages at data/packages/{name}/{version}/
+///
+/// NOTE: This module requires mkdir and listDir which are not yet in stdlib.
+/// See claude/MISSING_FEATURES.md. For now, only the interfaces are defined.
+/// File reading/writing works via existing std/fs.
+
+import "std/string"
+import "std/fs"
+import "std/path"
+import "std/log"
+
+/// Base directory for stored package files.
+const PACKAGES_DIR: string = "data/packages"
+
+/// Build the storage path for a package version.
+/// Returns: "data/packages/{name}/{version}"
+fn versionPath(name: string, version: string) string {
+    return join3(PACKAGES_DIR, name, version)
+}
+
+/// Build the path for a specific file in a package version.
+/// Returns: "data/packages/{name}/{version}/{file_path}"
+fn filePath(name: string, version: string, file: string) string {
+    return join4(PACKAGES_DIR, name, version, file)
+}
+
+/// Read a stored package file.
+fn readPackageFile(name: string, version: string, file: string) FsError!string {
+    var p = filePath(name, version, file)
+    return try readFile(p)
+}
+
+/// Store a package file on disk.
+/// NOTE: Requires mkdir to create parent directories — blocked until
+/// mkdir is added to stdlib. See claude/MISSING_FEATURES.md.
+fn storePackageFile(name: string, version: string, file: string, content: string) FsError!void {
+    // TODO: mkdir data/packages/{name}/{version}/ — blocked on missing mkdir
+    var p = filePath(name, version, file)
+    try writeFile(p, content)
+}
+
+/// Check if a package version directory exists.
+fn versionExists(name: string, version: string) bool {
+    // Check for the manifest file as a proxy for directory existence
+    var p = filePath(name, version, "cot.json")
+    return fileExists(p)
+}

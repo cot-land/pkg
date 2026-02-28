@@ -1,0 +1,87 @@
+/// Package API handlers — list, detail, create.
+///
+/// Ported from JSR api/src/api/package.rs (list, get, create handlers).
+
+import "std/string"
+import "std/list"
+import "std/json"
+import "response"
+import "request"
+import "router"
+import "registry"
+import "package"
+
+/// GET /api/packages — list all packages.
+/// Ported from JSR GET /api/scopes/:scope/packages.
+fn handleListPackages(reg: *Registry) string {
+    var names = reg.allNames()
+    var arr = jsonArray()
+    var i: int = 0
+    while (i < names.count) {
+        var name = names.get(i)
+        if (reg.get(name)) |pkg| {
+            var obj = jsonObject()
+            jsonObjectPut(obj, "name", jsonString(pkg.name))
+            jsonObjectPut(obj, "description", jsonString(pkg.description))
+            jsonObjectPut(obj, "author", jsonString(pkg.author))
+            jsonObjectPut(obj, "version_count", jsonInt(pkg.versions.count))
+            if (pkg.latest()) |latest| {
+                jsonObjectPut(obj, "latest_version", jsonString(latest.number))
+            }
+            jsonArrayPush(arr, obj)
+        }
+        i += 1
+    }
+    var body = encode(arr)
+    jsonFree(arr)
+    return jsonResponse(200, body)
+}
+
+/// GET /api/packages/:name — get package detail.
+/// Ported from JSR GET /api/scopes/:scope/packages/:package.
+fn handleGetPackage(reg: *Registry, name: string) string {
+    if (reg.get(name)) |pkg| {
+        return jsonResponse(200, pkg.toJson())
+    }
+    return notFound()
+}
+
+/// POST /api/packages — create a new package.
+/// Ported from JSR POST /api/scopes/:scope/packages.
+fn handleCreatePackage(reg: *Registry, req: Request) string {
+    var body = req.body
+    if (@lenOf(body) == 0) {
+        return badRequest("empty body")
+    }
+
+    var root = parse(body)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        return badRequest("invalid JSON")
+    }
+
+    var name = jsonObjectGetString(root, "name")
+    var description = jsonObjectGetString(root, "description")
+    var author = jsonObjectGetString(root, "author")
+    jsonFree(root)
+
+    if (@lenOf(name) == 0) {
+        return badRequest("missing name")
+    }
+
+    if (not isValidPackageName(name)) {
+        return badRequest("invalid package name")
+    }
+
+    if (reg.has(name)) {
+        return jsonResponse(409, "{\"error\":\"package already exists\"}")
+    }
+
+    reg.create(name, description, author)
+
+    var result = jsonObject()
+    jsonObjectPut(result, "name", jsonString(name))
+    jsonObjectPut(result, "created", jsonBool(true))
+    var resp_body = encode(result)
+    jsonFree(result)
+    return jsonResponse(201, resp_body)
+}

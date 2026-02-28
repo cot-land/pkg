@@ -1,0 +1,42 @@
+/// Authentication — token validation for publish endpoints.
+///
+/// Ported from JSR api/src/token.rs (token validation).
+/// Simple Bearer token auth — check Authorization header.
+
+import "std/string"
+import "request"
+
+/// Extract the Bearer token from an Authorization header.
+/// Ported from Go net/http — parse "Bearer <token>" format.
+fn extractBearerToken(req: Request) string {
+    var auth = req.header("Authorization")
+    if (@lenOf(auth) == 0) { return "" }
+
+    // Expect "Bearer <token>"
+    if (startsWith(auth, "Bearer ")) {
+        return substring(auth, 7, @lenOf(auth))
+    }
+    return ""
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "extract bearer token" {
+    var req = Request.parse("POST /api HTTP/1.1\r\nAuthorization: Bearer mytoken123\r\n\r\n")
+    var token = extractBearerToken(req)
+    @assertEq(token, "mytoken123")
+}
+
+test "no authorization header" {
+    var req = Request.parse("GET /api HTTP/1.1\r\nHost: cot.land\r\n\r\n")
+    var token = extractBearerToken(req)
+    @assertEq(token, "")
+}
+
+test "non-bearer auth rejected" {
+    var req = Request.parse("GET /api HTTP/1.1\r\nAuthorization: Basic dXNlcjpwYXNz\r\n\r\n")
+    var token = extractBearerToken(req)
+    @assertEq(token, "")
+}

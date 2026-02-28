@@ -1,0 +1,149 @@
+/// HTTP response building.
+///
+/// Ported from Go net/http/server.go (response.Write, WriteHeader).
+/// Provides builders for JSON, HTML, and plain text responses with proper headers.
+
+import "std/string"
+
+/// HTTP status code to reason phrase mapping.
+/// Ported from Go net/http.StatusText.
+fn statusText(code: int) string {
+    return switch (code) {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        422 => "Unprocessable Entity",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        else => "Unknown",
+    }
+}
+
+/// Build a complete HTTP response string with custom content type.
+/// Ported from Go net/http response writing (WriteHeader + Write).
+fn buildResponse(status: int, content_type: string, body: string) string {
+    var sb: StringBuilder = .{}
+    sb.append("HTTP/1.1 ")
+    sb.appendInt(status)
+    sb.append(" ")
+    sb.append(statusText(status))
+    sb.append("\r\n")
+    sb.append("Content-Type: ")
+    sb.append(content_type)
+    sb.append("\r\n")
+    sb.append("Content-Length: ")
+    sb.appendInt(@lenOf(body))
+    sb.append("\r\n")
+    sb.append("Connection: close\r\n")
+    sb.append("\r\n")
+    sb.append(body)
+    return sb.toString()
+}
+
+/// Build a JSON response (Content-Type: application/json).
+fn jsonResponse(status: int, body: string) string {
+    return buildResponse(status, "application/json; charset=utf-8", body)
+}
+
+/// Build an HTML response (Content-Type: text/html).
+fn htmlResponse(status: int, body: string) string {
+    return buildResponse(status, "text/html; charset=utf-8", body)
+}
+
+/// Build a plain text response.
+fn textResponse(status: int, body: string) string {
+    return buildResponse(status, "text/plain; charset=utf-8", body)
+}
+
+/// Build a CSS response.
+fn cssResponse(body: string) string {
+    return buildResponse(200, "text/css; charset=utf-8", body)
+}
+
+/// Build a redirect response (302 Found).
+/// Ported from Go net/http.Redirect.
+fn redirect(location: string) string {
+    var sb: StringBuilder = .{}
+    sb.append("HTTP/1.1 302 Found\r\n")
+    sb.append("Location: ")
+    sb.append(location)
+    sb.append("\r\n")
+    sb.append("Content-Length: 0\r\n")
+    sb.append("Connection: close\r\n")
+    sb.append("\r\n")
+    return sb.toString()
+}
+
+/// Build a 404 Not Found JSON response.
+fn notFound() string {
+    return jsonResponse(404, "{\"error\":\"not found\"}")
+}
+
+/// Build a 405 Method Not Allowed JSON response.
+fn methodNotAllowed() string {
+    return jsonResponse(405, "{\"error\":\"method not allowed\"}")
+}
+
+/// Build a 400 Bad Request JSON response with message.
+fn badRequest(msg: string) string {
+    var sb: StringBuilder = .{}
+    sb.append("{\"error\":\"")
+    sb.append(msg)
+    sb.append("\"}")
+    return jsonResponse(400, sb.toString())
+}
+
+/// Build a 401 Unauthorized JSON response.
+fn unauthorized() string {
+    return jsonResponse(401, "{\"error\":\"unauthorized\"}")
+}
+
+/// Build a 500 Internal Server Error JSON response.
+fn serverError() string {
+    return jsonResponse(500, "{\"error\":\"internal server error\"}")
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "json response" {
+    var resp = jsonResponse(200, "{\"ok\":true}")
+    @assert(startsWith(resp, "HTTP/1.1 200 OK\r\n"))
+    @assert(contains(resp, "application/json"))
+    @assert(contains(resp, "{\"ok\":true}"))
+}
+
+test "html response" {
+    var resp = htmlResponse(200, "<h1>Hello</h1>")
+    @assert(contains(resp, "text/html"))
+    @assert(contains(resp, "<h1>Hello</h1>"))
+}
+
+test "not found response" {
+    var resp = notFound()
+    @assert(startsWith(resp, "HTTP/1.1 404"))
+    @assert(contains(resp, "not found"))
+}
+
+test "redirect response" {
+    var resp = redirect("/packages")
+    @assert(contains(resp, "302 Found"))
+    @assert(contains(resp, "Location: /packages"))
+}
+
+test "status text" {
+    @assertEq(statusText(200), "OK")
+    @assertEq(statusText(404), "Not Found")
+    @assertEq(statusText(500), "Internal Server Error")
+}

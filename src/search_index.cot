@@ -1,0 +1,131 @@
+/// Search index — simple in-memory text matching over package names and descriptions.
+///
+/// Ported from JSR api/src/orama.rs (search logic, simplified).
+/// Linear scan with substring matching — good enough for early registry.
+
+import "std/string"
+import "std/list"
+import "package"
+
+/// A search result entry.
+struct SearchResult {
+    name: string,
+    description: string,
+    score: int,
+}
+
+/// Search packages by keyword.
+/// Matches against package name and description (case-insensitive).
+/// Ported from JSR search — simplified to substring matching.
+fn searchPackages(packages: List(Package), query: string) List(SearchResult) {
+    var results: List(SearchResult) = .{}
+    var q = toLower(query)
+    var qlen = @lenOf(q)
+    if (qlen == 0) { return results }
+
+    var i: int = 0
+    while (i < packages.count) {
+        var pkg = packages.get(i)
+        var name_lower = toLower(pkg.name)
+        var desc_lower = toLower(pkg.description)
+        var score: int = 0
+
+        // Exact name match scores highest
+        if (name_lower == q) {
+            score = 100
+        } else if (startsWith(name_lower, q)) {
+            // Name prefix match
+            score = 50
+        } else if (contains(name_lower, q)) {
+            // Name substring match
+            score = 25
+        }
+
+        // Description match adds to score
+        if (contains(desc_lower, q)) {
+            score += 10
+        }
+
+        if (score > 0) {
+            var result = SearchResult {
+                name: pkg.name,
+                description: pkg.description,
+                score: score,
+            }
+            results.append(result)
+        }
+        i += 1
+    }
+
+    // Sort by score descending (insertion sort)
+    // Ported from Go sort.Slice pattern
+    var j: int = 1
+    while (j < results.count) {
+        var k = j
+        while (k > 0) {
+            var a = results.get(k - 1)
+            var b = results.get(k)
+            if (a.score < b.score) {
+                results.set(k - 1, b)
+                results.set(k, a)
+                k -= 1
+            } else {
+                break
+            }
+        }
+        j += 1
+    }
+
+    return results
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "search by exact name" {
+    var packages: List(Package) = .{}
+    packages.append(Package.init("json", "JSON parser", "alice"))
+    packages.append(Package.init("http", "HTTP client", "bob"))
+    var results = searchPackages(packages, "json")
+    @assertEq(results.count, 1)
+    @assertEq(results.get(0).name, "json")
+    // Score: 100 (exact name) + 10 (description contains "json") = 110
+    @assertEq(results.get(0).score, 110)
+}
+
+test "search by description" {
+    var packages: List(Package) = .{}
+    packages.append(Package.init("my-lib", "A fast JSON parser", "alice"))
+    packages.append(Package.init("other", "HTTP client", "bob"))
+    var results = searchPackages(packages, "json")
+    @assertEq(results.count, 1)
+    @assertEq(results.get(0).name, "my-lib")
+}
+
+test "search case insensitive" {
+    var packages: List(Package) = .{}
+    packages.append(Package.init("json-utils", "Utilities for JSON", "alice"))
+    var results = searchPackages(packages, "JSON")
+    @assertEq(results.count, 1)
+}
+
+test "search no results" {
+    var packages: List(Package) = .{}
+    packages.append(Package.init("http", "HTTP client", "bob"))
+    var results = searchPackages(packages, "crypto")
+    @assertEq(results.count, 0)
+}
+
+test "search ranking" {
+    var packages: List(Package) = .{}
+    packages.append(Package.init("json-extra", "Extra JSON tools", "alice"))
+    packages.append(Package.init("json", "JSON parser", "bob"))
+    packages.append(Package.init("my-json-lib", "A JSON library", "carol"))
+    var results = searchPackages(packages, "json")
+    @assertEq(results.count, 3)
+    // Exact match first
+    @assertEq(results.get(0).name, "json")
+    // Prefix match second
+    @assertEq(results.get(1).name, "json-extra")
+}

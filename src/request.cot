@@ -1,0 +1,261 @@
+/// HTTP request parsing and query string utilities.
+///
+/// Ported from Go net/http/request.go (ReadRequest, parseForm).
+/// Builds a proper Request struct instead of raw pointer offsets.
+
+import "std/string"
+import "std/list"
+import "std/sys"
+
+/// A parsed HTTP request.
+/// Ported from Go net/http.Request — method, path, version, headers, body.
+struct Request {
+    method: string,
+    path: string,
+    version: string,
+    headers: string,
+    body: string,
+    raw_query: string,
+
+    /// Parse a raw HTTP request string into a Request struct.
+    /// Format: "METHOD /path?query HTTP/1.1\r\nHeaders\r\n\r\nBody"
+    /// Ported from Go net/http.ReadRequest.
+    static fn parse(data: string) Request {
+        var dlen = @lenOf(data)
+        if (dlen == 0) {
+            return Request {
+                method: "",
+                path: "",
+                version: "",
+                headers: "",
+                body: "",
+                raw_query: "",
+            }
+        }
+
+        // Find first space (end of method)
+        // Go: readLine → parseRequestLine
+        var pos: int = 0
+        while (pos < dlen and charAt(data, pos) != ' ') {
+            pos += 1
+        }
+        var method = substring(data, 0, pos)
+        pos += 1
+
+        // Find second space (end of path+query)
+        var uri_start = pos
+        while (pos < dlen and charAt(data, pos) != ' ') {
+            pos += 1
+        }
+        var raw_uri = substring(data, uri_start, pos)
+        pos += 1
+
+        // Split URI into path and query
+        // Go: url.Parse(requestURI) → separates path and rawQuery
+        var path = raw_uri
+        var raw_query = ""
+        var q_idx = indexOf(raw_uri, "?")
+        if (q_idx >= 0) {
+            path = substring(raw_uri, 0, q_idx)
+            raw_query = substring(raw_uri, q_idx + 1, @lenOf(raw_uri))
+        }
+
+        // Find end of request line (\r\n)
+        // Go: textproto.ReadLine → reads until \r\n
+        var ver_start = pos
+        while (pos < dlen - 1) {
+            if (charAt(data, pos) == '\r' and charAt(data, pos + 1) == '\n') {
+                break
+            }
+            pos += 1
+        }
+        var version = substring(data, ver_start, pos)
+        pos += 2
+
+        // Find end of headers (\r\n\r\n)
+        // Go: textproto.ReadMIMEHeader → reads headers until blank line
+        var hdr_start = pos
+        var hdr_end = pos
+        while (pos < dlen - 3) {
+            if (charAt(data, pos) == '\r' and charAt(data, pos + 1) == '\n' and charAt(data, pos + 2) == '\r' and charAt(data, pos + 3) == '\n') {
+                hdr_end = pos
+                pos += 4
+                break
+            }
+            pos += 1
+        }
+        var headers = substring(data, hdr_start, hdr_end)
+
+        // Remaining is body
+        var body = ""
+        if (pos < dlen) {
+            body = substring(data, pos, dlen)
+        }
+
+        return Request {
+            method: method,
+            path: path,
+            version: version,
+            headers: headers,
+            body: body,
+            raw_query: raw_query,
+        }
+    }
+
+    /// Look up a header value by name.
+    /// Ported from Go net/http.Header.Get — case-sensitive lookup in "Key: Value\r\n" block.
+    fn header(name: string) string {
+        var hdrs = self.headers
+        var hlen = @lenOf(hdrs)
+        var nlen = @lenOf(name)
+        if (hlen == 0 or nlen == 0) { return "" }
+
+        // Scan for "name: " at start of each line
+        // Go: textproto.CanonicalMIMEHeaderKey + map lookup
+        var pos: int = 0
+        while (pos + nlen + 2 <= hlen) {
+            var at_line_start = false
+            if (pos == 0) {
+                at_line_start = true
+            } else if (charAt(hdrs, pos - 1) == '\n') {
+                at_line_start = true
+            }
+
+            if (at_line_start) {
+                var match = true
+                var j: int = 0
+                while (j < nlen and match) {
+                    if (charAt(hdrs, pos + j) != charAt(name, j)) {
+                        match = false
+                    }
+                    j += 1
+                }
+                // Check for ": " separator after name
+                if (match and charAt(hdrs, pos + nlen) == ':' and charAt(hdrs, pos + nlen + 1) == ' ') {
+                    var val_start = pos + nlen + 2
+                    var val_end = val_start
+                    while (val_end < hlen and charAt(hdrs, val_end) != '\r' and charAt(hdrs, val_end) != '\n') {
+                        val_end += 1
+                    }
+                    return substring(hdrs, val_start, val_end)
+                }
+            }
+            pos += 1
+        }
+        return ""
+    }
+
+    /// Get the Content-Length header as an integer.
+    /// Returns 0 if not present or invalid.
+    fn contentLength() int {
+        var cl = self.header("Content-Length")
+        if (@lenOf(cl) == 0) { return 0 }
+        return parseInt(cl)
+    }
+}
+
+/// A single key-value pair from a query string.
+struct QueryParam {
+    key: string,
+    value: string,
+}
+
+/// Parse a URL query string into a list of key-value pairs.
+/// Ported from Go net/url.ParseQuery — splits on "&", then on "=".
+fn parseQuery(query: string) List(QueryParam) {
+    var params: List(QueryParam) = .{}
+    var qlen = @lenOf(query)
+    if (qlen == 0) { return params }
+
+    // Split on "&"
+    var parts: List(string) = .{}
+    splitInto(query, "&", &parts)
+
+    var i: int = 0
+    while (i < parts.count) {
+        var part = parts.get(i)
+        var eq_idx = indexOf(part, "=")
+        if (eq_idx >= 0) {
+            var param = QueryParam {
+                key: substring(part, 0, eq_idx),
+                value: substring(part, eq_idx + 1, @lenOf(part)),
+            }
+            params.append(param)
+        } else {
+            var param = QueryParam {
+                key: part,
+                value: "",
+            }
+            params.append(param)
+        }
+        i += 1
+    }
+    return params
+}
+
+/// Get a query parameter value by key.
+/// Returns empty string if not found.
+/// Ported from Go url.Values.Get.
+fn queryGet(params: List(QueryParam), key: string) string {
+    var i: int = 0
+    while (i < params.count) {
+        var p = params.get(i)
+        if (p.key == key) {
+            return p.value
+        }
+        i += 1
+    }
+    return ""
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "parse GET request" {
+    var req = Request.parse("GET /api/packages HTTP/1.1\r\nHost: cot.land\r\n\r\n")
+    @assertEq(req.method, "GET")
+    @assertEq(req.path, "/api/packages")
+    @assertEq(req.version, "HTTP/1.1")
+    @assertEq(req.raw_query, "")
+}
+
+test "parse request with query string" {
+    var req = Request.parse("GET /search?q=json&page=2 HTTP/1.1\r\n\r\n")
+    @assertEq(req.path, "/search")
+    @assertEq(req.raw_query, "q=json&page=2")
+}
+
+test "parse POST with body" {
+    var req = Request.parse("POST /api/packages HTTP/1.1\r\nContent-Length: 13\r\n\r\n{\"name\":\"hi\"}")
+    @assertEq(req.method, "POST")
+    @assertEq(req.body, "{\"name\":\"hi\"}")
+    @assertEq(req.contentLength(), 13)
+}
+
+test "header lookup" {
+    var req = Request.parse("GET / HTTP/1.1\r\nHost: cot.land\r\nContent-Type: application/json\r\n\r\n")
+    @assertEq(req.header("Host"), "cot.land")
+    @assertEq(req.header("Content-Type"), "application/json")
+    @assertEq(req.header("Missing"), "")
+}
+
+test "parse query string" {
+    var params = parseQuery("q=json&page=2&sort=name")
+    @assertEq(params.count, 3)
+    @assertEq(queryGet(params, "q"), "json")
+    @assertEq(queryGet(params, "page"), "2")
+    @assertEq(queryGet(params, "sort"), "name")
+}
+
+test "parse empty query" {
+    var params = parseQuery("")
+    @assertEq(params.count, 0)
+}
+
+test "query param without value" {
+    var params = parseQuery("verbose&debug")
+    @assertEq(params.count, 2)
+    @assertEq(queryGet(params, "verbose"), "")
+    @assertEq(queryGet(params, "debug"), "")
+}

@@ -1,0 +1,74 @@
+/// User and authentication models.
+///
+/// Ported from JSR api/src/db/models.rs (User, Token).
+/// Simple token-based auth for package publishing.
+
+import "std/string"
+import "std/list"
+
+/// An API token for authenticating publish requests.
+/// Ported from JSR Token model.
+struct ApiToken {
+    token: string,
+    description: string,
+    created: string,
+    active: bool,
+}
+
+/// A registered user who can publish packages.
+struct User {
+    name: string,
+    tokens: List(ApiToken),
+
+    static fn init(name: string) User {
+        var tokens: List(ApiToken) = .{}
+        return User {
+            name: name,
+            tokens: tokens,
+        }
+    }
+
+    /// Check if this user has a valid token matching the given string.
+    fn hasToken(token: string) bool {
+        var i: int = 0
+        while (i < self.tokens.count) {
+            var t = self.tokens.get(i)
+            if (t.token == token and t.active) {
+                return true
+            }
+            i += 1
+        }
+        return false
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "user token validation" {
+    var user = User.init("alice")
+    @assert(not user.hasToken("secret123"))
+
+    var tok = ApiToken {
+        token: "secret123",
+        description: "CI token",
+        created: "2026-03-01T00:00:00Z",
+        active: true,
+    }
+    user.tokens.append(tok)
+    @assert(user.hasToken("secret123"))
+    @assert(not user.hasToken("wrong"))
+}
+
+test "inactive token rejected" {
+    var user = User.init("bob")
+    var tok = ApiToken {
+        token: "oldtoken",
+        description: "Revoked",
+        created: "2026-01-01T00:00:00Z",
+        active: false,
+    }
+    user.tokens.append(tok)
+    @assert(not user.hasToken("oldtoken"))
+}

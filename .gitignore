@@ -1,0 +1,6 @@
+stdlib
+references/
+data/
+pkg
+*.dylib
+.DS_Store

@@ -1,0 +1,105 @@
+/// HTTP server — TCP accept loop with request parsing and response writing.
+///
+/// Ported from Go net/http.Server.Serve (server.go).
+/// Single-threaded accept loop: accept → read → parse → dispatch → respond → close.
+///
+/// The dispatch function is provided as a handler_id switch in main.cot,
+/// not as a function pointer (Cot doesn't need closures for this pattern).
+
+import "std/http"
+import "std/string"
+import "std/sys"
+import "std/log"
+import "request"
+import "response"
+import "router"
+
+/// Maximum request size (64 KB).
+/// Go net/http defaults to 1MB for headers, we start smaller.
+const MAX_REQUEST_SIZE: int = 65536
+
+/// A parsed incoming request with its route match, ready for dispatch.
+struct ServerRequest {
+    client_fd: int,
+    req: Request,
+    route: RouteMatch,
+}
+
+/// Server configuration.
+struct Server {
+    port: int,
+    rtr: Router,
+    listen_fd: int,
+
+    /// Create a new server on the given port.
+    static fn init(port: int) Server {
+        return Server {
+            port: port,
+            rtr: Router.init(),
+            listen_fd: 0 - 1,
+        }
+    }
+
+    /// Get the router to register routes before starting.
+    fn router() *Router {
+        return &self.rtr
+    }
+
+    /// Start listening. Returns error if bind fails.
+    /// Ported from Go net/http.Server.ListenAndServe.
+    fn listen() NetError!void {
+        self.listen_fd = try tcpListen(self.port)
+        info("cot.land registry listening on :${intToString(self.port)}")
+    }
+
+    /// Accept and handle connections in a loop.
+    /// Ported from Go net/http.Server.Serve — the main accept loop.
+    ///
+    /// The dispatch callback pattern: instead of function pointers,
+    /// the caller provides handling via the returned Request/RouteMatch.
+    /// This function reads the request, matches the route, and returns
+    /// the match info. The caller (main.cot) does the actual dispatch.
+    fn acceptOne() ?ServerRequest {
+        var client_fd = acceptConnection(self.listen_fd) catch {
+            return null
+        }
+
+        // Read request data
+        // Go: conn.serve → readRequest → http.ReadRequest
+        var buf = alloc(0, MAX_REQUEST_SIZE)
+        var n = socketRead(client_fd, buf, MAX_REQUEST_SIZE)
+
+        if (n <= 0) {
+            dealloc(buf)
+            socketClose(client_fd)
+            return null
+        }
+
+        // Parse request
+        var req = Request.parse(@string(buf, n))
+        dealloc(buf)
+
+        // Match route
+        var m = self.rtr.match(req.method, req.path)
+
+        return ServerRequest {
+            client_fd: client_fd,
+            req: req,
+            route: m,
+        }
+    }
+
+    /// Send a response string and close the connection.
+    fn respond(client_fd: int, resp: string) void {
+        socketWriteString(client_fd, resp)
+        socketClose(client_fd)
+    }
+
+    /// Shut down the server.
+    fn close() void {
+        if (self.listen_fd >= 0) {
+            socketClose(self.listen_fd)
+            self.listen_fd = 0 - 1
+        }
+    }
+}

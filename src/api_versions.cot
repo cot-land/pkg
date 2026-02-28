@@ -1,0 +1,111 @@
+/// Version API handlers — get version detail, publish.
+///
+/// Ported from JSR api/src/api/package.rs (version endpoints).
+
+import "std/string"
+import "std/list"
+import "std/json"
+import "std/time"
+import "response"
+import "request"
+import "router"
+import "registry"
+import "package"
+
+/// GET /api/packages/:name/:version — get specific version metadata.
+/// Ported from JSR GET /api/scopes/:scope/packages/:package/versions/:version.
+fn handleGetVersion(reg: *Registry, name: string, version: string) string {
+    if (reg.get(name)) |pkg| {
+        if (pkg.getVersion(version)) |ver| {
+            var obj = jsonObject()
+            jsonObjectPut(obj, "package", jsonString(name))
+            jsonObjectPut(obj, "version", jsonString(ver.number))
+            jsonObjectPut(obj, "published", jsonString(ver.published))
+            jsonObjectPut(obj, "checksum", jsonString(ver.checksum))
+
+            var deps_arr = jsonArray()
+            var i: int = 0
+            while (i < ver.dependencies.count) {
+                var dep = ver.dependencies.get(i)
+                var dep_obj = jsonObject()
+                jsonObjectPut(dep_obj, "name", jsonString(dep.name))
+                jsonObjectPut(dep_obj, "version", jsonString(dep.version_req))
+                jsonArrayPush(deps_arr, dep_obj)
+                i += 1
+            }
+            jsonObjectPut(obj, "dependencies", deps_arr)
+
+            var body = encode(obj)
+            jsonFree(obj)
+            return jsonResponse(200, body)
+        }
+        return jsonResponse(404, "{\"error\":\"version not found\"}")
+    }
+    return notFound()
+}
+
+/// POST /api/packages/:name/:version — publish a new version.
+/// Ported from JSR POST /api/scopes/:scope/packages/:package/versions.
+///
+/// Expects JSON body with optional dependencies.
+/// Creates version metadata. File upload handled separately.
+fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Request) string {
+    // Check package exists
+    if (not reg.has(name)) {
+        return notFound()
+    }
+
+    // Check version doesn't already exist (immutable versions)
+    // Ported from JSR's immutability check
+    if (reg.get(name)) |pkg| {
+        if (pkg.hasVersion(version)) {
+            return jsonResponse(409, "{\"error\":\"version already published, versions are immutable\"}")
+        }
+    }
+
+    // Parse optional dependencies from body
+    var deps: List(Dependency) = .{}
+    var body = req.body
+    if (@lenOf(body) > 0) {
+        var root = parse(body)
+        if (root != 0 and jsonTag(root) == JSON_OBJECT) {
+            var deps_json = jsonObjectGet(root, "dependencies")
+            if (deps_json != 0 and jsonTag(deps_json) == JSON_OBJECT) {
+                var dep_keys = jsonObjectKeys(deps_json)
+                var i: int = 0
+                while (i < dep_keys.count) {
+                    var dep_name = dep_keys.get(i)
+                    var dep_ver = jsonObjectGetString(deps_json, dep_name)
+                    var dep = Dependency {
+                        name: dep_name,
+                        version_req: dep_ver,
+                    }
+                    deps.append(dep)
+                    i += 1
+                }
+            }
+            jsonFree(root)
+        }
+    }
+
+    // Create version with timestamp
+    var ver = Version {
+        number: version,
+        published: intToString(milliTimestamp()),
+        checksum: "",
+        dependencies: deps,
+    }
+
+    if (reg.addVersion(name, ver)) {
+        var result = jsonObject()
+        jsonObjectPut(result, "package", jsonString(name))
+        jsonObjectPut(result, "version", jsonString(version))
+        jsonObjectPut(result, "published", jsonBool(true))
+        var resp_body = encode(result)
+        jsonFree(result)
+        return jsonResponse(201, resp_body)
+    }
+
+    return serverError()
+}
+

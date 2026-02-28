@@ -1,0 +1,51 @@
+/// Static file serving — serves CSS and other static assets.
+///
+/// Ported from Go net/http.FileServer (simplified to single-file serving).
+/// Reads files from the static/ directory relative to the working directory.
+
+import "std/string"
+import "std/fs"
+import "response"
+
+/// Serve a static file by path. Returns the HTTP response string.
+/// Determines content type from file extension.
+fn serveStatic(path: string) string {
+    // Security: prevent path traversal
+    // Ported from Go http.Dir.Open — reject paths with ".."
+    if (contains(path, "..")) {
+        return notFound()
+    }
+
+    // Strip leading /static/ prefix
+    var file_path = ""
+    if (startsWith(path, "/static/")) {
+        file_path = substring(path, 8, @lenOf(path))
+    } else {
+        return notFound()
+    }
+
+    // Build full path: static/{file_path}
+    var sb: StringBuilder = .{}
+    sb.append("static/")
+    sb.append(file_path)
+    var full_path = sb.toString()
+
+    // Read file
+    var content = readFile(full_path) catch {
+        return notFound()
+    }
+
+    // Determine content type from extension
+    if (endsWith(file_path, ".css")) {
+        return cssResponse(content)
+    }
+    if (endsWith(file_path, ".js")) {
+        return buildResponse(200, "application/javascript; charset=utf-8", content)
+    }
+    if (endsWith(file_path, ".svg")) {
+        return buildResponse(200, "image/svg+xml", content)
+    }
+
+    // Default: plain text
+    return textResponse(200, content)
+}

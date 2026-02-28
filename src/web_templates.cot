@@ -1,0 +1,92 @@
+/// HTML template helpers — head, nav, footer, layout.
+///
+/// Ported from JSR frontend/utils/ (layout components).
+/// Server-rendered HTML via string concatenation — no JS framework.
+/// Go html/template equivalent using StringBuilder.
+
+import "std/string"
+
+/// Wrap a page body in the full HTML layout (head, nav, content, footer).
+/// Ported from JSR frontend/routes/_layout.tsx.
+fn layout(title: string, body: string) string {
+    var sb: StringBuilder = .{}
+    sb.append("<!DOCTYPE html>\n<html lang=\"en\">\n")
+    appendHead(&sb, title)
+    sb.append("<body>\n")
+    appendNav(&sb)
+    sb.append("<main>\n")
+    sb.append(body)
+    sb.append("</main>\n")
+    appendFooter(&sb)
+    sb.append("</body>\n</html>\n")
+    return sb.toString()
+}
+
+/// Append the <head> section.
+fn appendHead(sb: *StringBuilder, title: string) void {
+    sb.append("<head>\n")
+    sb.append("<meta charset=\"utf-8\">\n")
+    sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    sb.append("<title>")
+    sb.append(escapeHtml(title))
+    sb.append(" — cot.land</title>\n")
+    sb.append("<link rel=\"stylesheet\" href=\"/static/style.css\">\n")
+    sb.append("</head>\n")
+}
+
+/// Append the navigation bar.
+/// Ported from JSR frontend/components/Header.tsx.
+fn appendNav(sb: *StringBuilder) void {
+    sb.append("<nav>\n")
+    sb.append("<a href=\"/\" class=\"logo\">cot.land</a>\n")
+    sb.append("<div class=\"nav-links\">\n")
+    sb.append("<a href=\"/packages\">Packages</a>\n")
+    sb.append("<form action=\"/search\" method=\"get\" class=\"search-form\">\n")
+    sb.append("<input type=\"text\" name=\"q\" placeholder=\"Search packages...\">\n")
+    sb.append("</form>\n")
+    sb.append("</div>\n")
+    sb.append("</nav>\n")
+}
+
+/// Append the page footer.
+fn appendFooter(sb: *StringBuilder) void {
+    sb.append("<footer>\n")
+    sb.append("<p>cot.land — the Cot package registry</p>\n")
+    sb.append("<p><a href=\"https://github.com/cot-land/pkg\">Source</a></p>\n")
+    sb.append("</footer>\n")
+}
+
+/// Escape HTML special characters to prevent XSS.
+/// Ported from Go html.EscapeString.
+fn escapeHtml(s: string) string {
+    // Fast path: no special chars
+    if (not contains(s, "&") and not contains(s, "<") and not contains(s, ">") and not contains(s, "\"") and not contains(s, "'")) {
+        return s
+    }
+    var result = replace(s, "&", "&amp;")
+    result = replace(result, "<", "&lt;")
+    result = replace(result, ">", "&gt;")
+    result = replace(result, "\"", "&quot;")
+    result = replace(result, "'", "&#39;")
+    return result
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "escape html" {
+    @assertEq(escapeHtml("hello"), "hello")
+    @assertEq(escapeHtml("<script>"), "&lt;script&gt;")
+    @assertEq(escapeHtml("a&b"), "a&amp;b")
+    @assertEq(escapeHtml("say \"hi\""), "say &quot;hi&quot;")
+}
+
+test "layout wraps body" {
+    var html = layout("Home", "<h1>Welcome</h1>")
+    @assert(startsWith(html, "<!DOCTYPE html>"))
+    @assert(contains(html, "<title>Home"))
+    @assert(contains(html, "<h1>Welcome</h1>"))
+    @assert(contains(html, "<nav>"))
+    @assert(contains(html, "<footer>"))
+}

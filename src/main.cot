@@ -1,0 +1,196 @@
+/// cot.land package registry — main entry point.
+///
+/// Starts the HTTP server, registers all routes, and dispatches
+/// incoming requests to the appropriate handler.
+///
+/// Ported from Go net/http main server pattern:
+///   http.HandleFunc("/", handler)
+///   http.ListenAndServe(":8080", nil)
+
+import "std/os"
+import "std/sys"
+import "std/string"
+import "std/log"
+import "server"
+import "router"
+import "request"
+import "response"
+import "registry"
+import "search_index"
+import "package"
+import "api_packages"
+import "api_versions"
+import "api_search"
+import "api_auth"
+import "web_pages"
+import "web_static"
+
+const VERSION: string = "0.1.0"
+const DEFAULT_PORT: int = 8080
+
+/// Route handler IDs — used for dispatch in the main loop.
+/// Each route registered with the router gets a unique ID.
+var ROUTE_INDEX: int = 0
+var ROUTE_PACKAGES_PAGE: int = 0
+var ROUTE_PACKAGE_DETAIL_PAGE: int = 0
+var ROUTE_SEARCH_PAGE: int = 0
+var ROUTE_STATIC: int = 0
+var ROUTE_API_PACKAGES: int = 0
+var ROUTE_API_PACKAGE: int = 0
+var ROUTE_API_PACKAGE_VERSION: int = 0
+var ROUTE_API_SEARCH: int = 0
+var ROUTE_API_PUBLISH: int = 0
+
+fn main() void {
+    // Handle CLI arguments
+    if (argsCount() >= 2) {
+        var cmd = arg(1)
+        if (cmd == "help" or cmd == "--help" or cmd == "-h") {
+            printUsage()
+            return
+        }
+        if (cmd == "version" or cmd == "--version") {
+            info("cot.land registry v${VERSION}")
+            return
+        }
+    }
+
+    // Initialize registry
+    var reg = Registry.init("data/registry.json")
+    info("cot.land registry v${VERSION}")
+
+    // Create server
+    var srv = Server.init(DEFAULT_PORT)
+
+    // Register routes
+    // Ported from Go http.HandleFunc / http.ServeMux pattern
+    var r = srv.router()
+    ROUTE_INDEX = r.handle("GET /")
+    ROUTE_PACKAGES_PAGE = r.handle("GET /packages")
+    ROUTE_PACKAGE_DETAIL_PAGE = r.handle("GET /packages/:name")
+    ROUTE_SEARCH_PAGE = r.handle("GET /search")
+    ROUTE_STATIC = r.handle("GET /static/*")
+
+    // API routes
+    ROUTE_API_PACKAGES = r.handle("GET /api/packages")
+    ROUTE_API_PACKAGE = r.handle("GET /api/packages/:name")
+    ROUTE_API_PACKAGE_VERSION = r.handle("GET /api/packages/:name/:version")
+    ROUTE_API_SEARCH = r.handle("GET /api/search")
+    ROUTE_API_PUBLISH = r.handle("POST /api/packages/:name/:version")
+
+    // Start listening
+    srv.listen() catch {
+        logError("failed to start server on port ${intToString(DEFAULT_PORT)}")
+        exit(1)
+    }
+
+    // Accept loop
+    // Ported from Go http.Server.Serve — accept connections and dispatch
+    while (true) {
+        if (srv.acceptOne()) |sreq| {
+            var resp = dispatch(&reg, sreq)
+            srv.respond(sreq.client_fd, resp)
+        }
+    }
+}
+
+/// Dispatch a matched request to the appropriate handler.
+/// Uses handler IDs from the router match — switch-based dispatch
+/// instead of function pointers.
+fn dispatch(reg: *Registry, sreq: ServerRequest) string {
+    var req = sreq.req
+    var route = sreq.route
+
+    // No route matched
+    if (not route.matched) {
+        // Check if it's an API path
+        if (startsWith(req.path, "/api/")) {
+            return notFound()
+        }
+        return htmlResponse(404, notFoundPage())
+    }
+
+    var id = route.handler_id
+
+    // Web routes
+    if (id == ROUTE_INDEX) {
+        return htmlResponse(200, landingPage())
+    }
+    if (id == ROUTE_PACKAGES_PAGE) {
+        var names = reg.allNames()
+        var pkgs: List(Package) = .{}
+        var i: int = 0
+        while (i < names.count) {
+            var name = names.get(i)
+            if (reg.get(name)) |pkg| {
+                pkgs.append(pkg)
+            }
+            i += 1
+        }
+        return htmlResponse(200, packageListPage(pkgs))
+    }
+    if (id == ROUTE_PACKAGE_DETAIL_PAGE) {
+        var name = paramGet(route, "name")
+        if (reg.get(name)) |pkg| {
+            return htmlResponse(200, packageDetailPage(pkg))
+        }
+        return htmlResponse(404, notFoundPage())
+    }
+    if (id == ROUTE_SEARCH_PAGE) {
+        var params = parseQuery(req.raw_query)
+        var q = queryGet(params, "q")
+        var names = reg.allNames()
+        var pkgs: List(Package) = .{}
+        var i: int = 0
+        while (i < names.count) {
+            var name = names.get(i)
+            if (reg.get(name)) |pkg| {
+                pkgs.append(pkg)
+            }
+            i += 1
+        }
+        var results = searchPackages(pkgs, q)
+        return htmlResponse(200, searchPage(q, results))
+    }
+    if (id == ROUTE_STATIC) {
+        return serveStatic(req.path)
+    }
+
+    // API routes
+    if (id == ROUTE_API_PACKAGES) {
+        if (req.method == "GET") {
+            return handleListPackages(reg)
+        }
+        return methodNotAllowed()
+    }
+    if (id == ROUTE_API_PACKAGE) {
+        var name = paramGet(route, "name")
+        return handleGetPackage(reg, name)
+    }
+    if (id == ROUTE_API_PACKAGE_VERSION) {
+        var name = paramGet(route, "name")
+        var version = paramGet(route, "version")
+        return handleGetVersion(reg, name, version)
+    }
+    if (id == ROUTE_API_SEARCH) {
+        var params = parseQuery(req.raw_query)
+        var q = queryGet(params, "q")
+        return handleSearch(reg, q)
+    }
+    if (id == ROUTE_API_PUBLISH) {
+        var name = paramGet(route, "name")
+        var version = paramGet(route, "version")
+        return handlePublishVersion(reg, name, version, req)
+    }
+
+    return notFound()
+}
+
+fn printUsage() void {
+    fd_write(1, @ptrOf("cot.land — the Cot package registry\n\n"), 38)
+    fd_write(1, @ptrOf("Usage: pkg [command]\n\n"), 21)
+    fd_write(1, @ptrOf("Commands:\n"), 10)
+    fd_write(1, @ptrOf("  (none)     Start the registry server\n"), 38)
+    fd_write(1, @ptrOf("  version    Print version\n"), 26)
+    fd_write(1, @ptrOf("  help       Print this help\n"), 28)
+}

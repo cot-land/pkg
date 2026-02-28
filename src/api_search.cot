@@ -1,0 +1,47 @@
+/// Search API handler.
+///
+/// Ported from JSR api/src/api/package.rs (search endpoint).
+
+import "std/string"
+import "std/list"
+import "std/json"
+import "response"
+import "request"
+import "registry"
+import "search_index"
+import "package"
+
+/// GET /api/search?q=term — search packages by keyword.
+/// Ported from JSR GET /api/packages (with search query parameter).
+fn handleSearch(reg: *Registry, query: string) string {
+    // Collect all packages into a list for searching
+    var names = reg.allNames()
+    var packages: List(Package) = .{}
+    var i: int = 0
+    while (i < names.count) {
+        var name = names.get(i)
+        if (reg.get(name)) |pkg| {
+            packages.append(pkg)
+        }
+        i += 1
+    }
+
+    var results = searchPackages(packages, query)
+
+    // Build JSON response
+    var arr = jsonArray()
+    i = 0
+    while (i < results.count) {
+        var r = results.get(i)
+        var obj = jsonObject()
+        jsonObjectPut(obj, "name", jsonString(r.name))
+        jsonObjectPut(obj, "description", jsonString(r.description))
+        jsonObjectPut(obj, "score", jsonInt(r.score))
+        jsonArrayPush(arr, obj)
+        i += 1
+    }
+
+    var body = encode(arr)
+    jsonFree(arr)
+    return jsonResponse(200, body)
+}

@@ -1,0 +1,173 @@
+/// HTML page rendering — landing, package list, package detail, search results.
+///
+/// Ported from JSR frontend/routes/ (page components).
+/// Server-rendered HTML with no JavaScript framework.
+
+import "std/string"
+import "std/list"
+import "std/json"
+import "web_templates"
+import "package"
+import "search_index"
+
+/// Render the landing page.
+/// Ported from JSR frontend/routes/index.tsx.
+fn landingPage() string {
+    var sb: StringBuilder = .{}
+    sb.append("<div class=\"hero\">\n")
+    sb.append("<h1>cot.land</h1>\n")
+    sb.append("<p>The package registry for the Cot programming language.</p>\n")
+    sb.append("<div class=\"hero-actions\">\n")
+    sb.append("<a href=\"/packages\" class=\"btn\">Browse Packages</a>\n")
+    sb.append("</div>\n")
+    sb.append("</div>\n")
+    sb.append("<div class=\"features\">\n")
+    sb.append("<div class=\"feature\">\n")
+    sb.append("<h3>Immutable Versions</h3>\n")
+    sb.append("<p>Published versions can never be modified or deleted. Your builds are reproducible forever.</p>\n")
+    sb.append("</div>\n")
+    sb.append("<div class=\"feature\">\n")
+    sb.append("<h3>Semver From Day One</h3>\n")
+    sb.append("<p>Every package uses semantic versioning. Dependencies are resolved correctly.</p>\n")
+    sb.append("</div>\n")
+    sb.append("<div class=\"feature\">\n")
+    sb.append("<h3>Built in Cot</h3>\n")
+    sb.append("<p>This registry is written in Cot itself — dogfooding the language for real web services.</p>\n")
+    sb.append("</div>\n")
+    sb.append("</div>\n")
+    return layout("Home", sb.toString())
+}
+
+/// Render the package list page.
+/// Ported from JSR frontend/routes/packages.tsx.
+fn packageListPage(packages: List(Package)) string {
+    var sb: StringBuilder = .{}
+    sb.append("<h2>Packages</h2>\n")
+
+    if (packages.count == 0) {
+        sb.append("<p>No packages published yet.</p>\n")
+        return layout("Packages", sb.toString())
+    }
+
+    sb.append("<div class=\"package-list\">\n")
+    var i: int = 0
+    while (i < packages.count) {
+        var pkg = packages.get(i)
+        sb.append("<div class=\"package-card\">\n")
+        sb.append("<h3><a href=\"/packages/")
+        sb.append(escapeHtml(pkg.name))
+        sb.append("\">")
+        sb.append(escapeHtml(pkg.name))
+        sb.append("</a></h3>\n")
+        sb.append("<p>")
+        sb.append(escapeHtml(pkg.description))
+        sb.append("</p>\n")
+        if (pkg.latest()) |latest| {
+            sb.append("<span class=\"version\">v")
+            sb.append(escapeHtml(latest.number))
+            sb.append("</span>\n")
+        }
+        sb.append("</div>\n")
+        i += 1
+    }
+    sb.append("</div>\n")
+    return layout("Packages", sb.toString())
+}
+
+/// Render a single package detail page.
+/// Ported from JSR frontend/routes/package.tsx.
+fn packageDetailPage(pkg: Package) string {
+    var sb: StringBuilder = .{}
+    sb.append("<div class=\"package-header\">\n")
+    sb.append("<h2>")
+    sb.append(escapeHtml(pkg.name))
+    sb.append("</h2>\n")
+    sb.append("<p class=\"description\">")
+    sb.append(escapeHtml(pkg.description))
+    sb.append("</p>\n")
+    sb.append("<p class=\"author\">by ")
+    sb.append(escapeHtml(pkg.author))
+    sb.append("</p>\n")
+    sb.append("</div>\n")
+
+    // Install command
+    sb.append("<div class=\"install\">\n")
+    sb.append("<h3>Install</h3>\n")
+    sb.append("<code>pkg add ")
+    sb.append(escapeHtml(pkg.name))
+    sb.append("</code>\n")
+    sb.append("</div>\n")
+
+    // Versions list
+    sb.append("<div class=\"versions\">\n")
+    sb.append("<h3>Versions</h3>\n")
+    if (pkg.versions.count == 0) {
+        sb.append("<p>No versions published yet.</p>\n")
+    } else {
+        sb.append("<table>\n")
+        sb.append("<tr><th>Version</th><th>Published</th></tr>\n")
+        // Show versions in reverse order (newest first)
+        var i = pkg.versions.count - 1
+        while (i >= 0) {
+            var v = pkg.versions.get(i)
+            sb.append("<tr><td><a href=\"/packages/")
+            sb.append(escapeHtml(pkg.name))
+            sb.append("/")
+            sb.append(escapeHtml(v.number))
+            sb.append("\">")
+            sb.append(escapeHtml(v.number))
+            sb.append("</a></td><td>")
+            sb.append(escapeHtml(v.published))
+            sb.append("</td></tr>\n")
+            i -= 1
+        }
+        sb.append("</table>\n")
+    }
+    sb.append("</div>\n")
+
+    return layout(pkg.name, sb.toString())
+}
+
+/// Render search results page.
+/// Ported from JSR frontend/routes/search.tsx.
+fn searchPage(query: string, results: List(SearchResult)) string {
+    var sb: StringBuilder = .{}
+    sb.append("<h2>Search results for \"")
+    sb.append(escapeHtml(query))
+    sb.append("\"</h2>\n")
+
+    if (results.count == 0) {
+        sb.append("<p>No packages found matching your search.</p>\n")
+        return layout("Search", sb.toString())
+    }
+
+    sb.append("<div class=\"search-results\">\n")
+    var i: int = 0
+    while (i < results.count) {
+        var r = results.get(i)
+        sb.append("<div class=\"package-card\">\n")
+        sb.append("<h3><a href=\"/packages/")
+        sb.append(escapeHtml(r.name))
+        sb.append("\">")
+        sb.append(escapeHtml(r.name))
+        sb.append("</a></h3>\n")
+        sb.append("<p>")
+        sb.append(escapeHtml(r.description))
+        sb.append("</p>\n")
+        sb.append("</div>\n")
+        i += 1
+    }
+    sb.append("</div>\n")
+    return layout("Search", sb.toString())
+}
+
+/// Render a 404 page.
+fn notFoundPage() string {
+    var sb: StringBuilder = .{}
+    sb.append("<div class=\"error-page\">\n")
+    sb.append("<h2>404 — Not Found</h2>\n")
+    sb.append("<p>The page you're looking for doesn't exist.</p>\n")
+    sb.append("<a href=\"/\">Go home</a>\n")
+    sb.append("</div>\n")
+    return layout("Not Found", sb.toString())
+}

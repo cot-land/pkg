@@ -1,0 +1,310 @@
+/// HTTP router with pattern matching and parameter extraction.
+///
+/// Ported from Go net/http.ServeMux (Go 1.22 enhanced routing).
+/// Supports method filtering and path parameters:
+///   "GET /api/packages"          — exact match with method
+///   "GET /api/packages/:name"    — path parameter extraction
+///   "/static/*"                  — wildcard suffix matching
+///
+/// Go reference: net/http/routing_tree.go, net/http/routing_pattern.go
+
+import "std/string"
+import "std/list"
+import "request"
+
+/// A single path parameter extracted from a route match.
+struct Param {
+    key: string,
+    value: string,
+}
+
+/// Result of matching a route — the handler ID and extracted parameters.
+struct RouteMatch {
+    handler_id: int,
+    params: List(Param),
+    matched: bool,
+}
+
+/// A registered route pattern.
+/// Ported from Go net/http.pattern (routing_pattern.go).
+struct Route {
+    method: string,
+    pattern: string,
+    handler_id: int,
+    segments: List(string),
+    is_wildcard: bool,
+}
+
+/// HTTP router that matches request paths to handler IDs.
+/// Ported from Go net/http.ServeMux.
+///
+/// Handler IDs are integers that the server uses to dispatch to
+/// the correct handler function via a switch statement. This avoids
+/// the need for function pointers or closures.
+struct Router {
+    routes: List(Route),
+    next_id: int,
+
+    /// Create a new empty router.
+    static fn init() Router {
+        var routes: List(Route) = .{}
+        return Router {
+            routes: routes,
+            next_id: 0,
+        }
+    }
+
+    /// Register a route pattern and return its handler ID.
+    /// Pattern format: "METHOD /path/:param" or "/path/*"
+    /// Ported from Go net/http.ServeMux.Handle.
+    fn handle(pattern: string) int {
+        var method = ""
+        var path = pattern
+
+        // Split "METHOD /path" into method and path
+        // Go: parsePattern separates method from path
+        var space_idx = indexOf(pattern, " ")
+        if (space_idx >= 0) {
+            method = substring(pattern, 0, space_idx)
+            path = substring(pattern, space_idx + 1, @lenOf(pattern))
+        }
+
+        // Split path into segments
+        // Go: pattern.segments from routing_pattern.go
+        var segments: List(string) = .{}
+        splitInto(path, "/", &segments)
+
+        // Check for wildcard suffix
+        var is_wildcard = endsWith(path, "/*")
+
+        var id = self.next_id
+        self.next_id += 1
+
+        var route = Route {
+            method: method,
+            pattern: pattern,
+            handler_id: id,
+            segments: segments,
+            is_wildcard: is_wildcard,
+        }
+        self.routes.append(route)
+        return id
+    }
+
+    /// Match a request against registered routes.
+    /// Returns a RouteMatch with handler_id and extracted parameters.
+    /// Ported from Go net/http.ServeMux.Handler (routing_tree.go match logic).
+    fn match(method: string, path: string) RouteMatch {
+        var params: List(Param) = .{}
+        var no_match = RouteMatch {
+            handler_id: 0 - 1,
+            params: params,
+            matched: false,
+        }
+
+        // Split request path into segments
+        var req_segments: List(string) = .{}
+        splitInto(path, "/", &req_segments)
+
+        var best_id: int = 0 - 1
+        var best_params: List(Param) = .{}
+        var best_specificity: int = 0 - 1
+        var found = false
+
+        var i: int = 0
+        while (i < self.routes.count) {
+            var route = self.routes.get(i)
+
+            // Check method filter
+            // Go: pattern.method check in ServeMux.Handler
+            if (@lenOf(route.method) > 0 and route.method != method) {
+                i += 1
+                continue
+            }
+
+            // Try to match segments
+            var match_params: List(Param) = .{}
+            var matched = matchSegments(route, req_segments, &match_params)
+
+            if (matched) {
+                // Prefer more specific routes (more literal segments)
+                // Go: ServeMux uses "most specific pattern wins"
+                var specificity = routeSpecificity(route)
+                if (not found or specificity > best_specificity) {
+                    found = true
+                    best_id = route.handler_id
+                    best_params = match_params
+                    best_specificity = specificity
+                }
+            }
+            i += 1
+        }
+
+        if (found) {
+            return RouteMatch {
+                handler_id: best_id,
+                params: best_params,
+                matched: true,
+            }
+        }
+        return no_match
+    }
+}
+
+/// Calculate route specificity — more literal segments = higher specificity.
+/// Ported from Go net/http routing precedence rules.
+fn routeSpecificity(route: Route) int {
+    var score: int = 0
+    var i: int = 0
+    while (i < route.segments.count) {
+        var seg = route.segments.get(i)
+        if (@lenOf(seg) > 0 and not startsWith(seg, ":") and seg != "*") {
+            score += 1
+        }
+        i += 1
+    }
+    // Method-specific routes are more specific
+    if (@lenOf(route.method) > 0) {
+        score += 100
+    }
+    return score
+}
+
+/// Match route segments against request path segments.
+/// Extracts :param values into match_params.
+/// Ported from Go net/http routing_tree.go match logic.
+fn matchSegments(route: Route, req_segments: List(string), match_params: *List(Param)) bool {
+    var route_segs = route.segments
+    var route_count = route_segs.count
+    var req_count = req_segments.count
+
+    // Wildcard routes match any suffix
+    if (route.is_wildcard) {
+        // Must match all segments up to the wildcard
+        var check_count = route_count - 1
+        if (req_count < check_count) { return false }
+
+        var i: int = 0
+        while (i < check_count) {
+            var route_seg = route_segs.get(i)
+            var req_seg = req_segments.get(i)
+
+            if (startsWith(route_seg, ":")) {
+                var param = Param {
+                    key: substring(route_seg, 1, @lenOf(route_seg)),
+                    value: req_seg,
+                }
+                match_params.append(param)
+            } else if (route_seg != req_seg) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    // Exact match — segment counts must be equal
+    if (route_count != req_count) { return false }
+
+    var i: int = 0
+    while (i < route_count) {
+        var route_seg = route_segs.get(i)
+        var req_seg = req_segments.get(i)
+
+        if (startsWith(route_seg, ":")) {
+            // Parameter segment — capture value
+            var param = Param {
+                key: substring(route_seg, 1, @lenOf(route_seg)),
+                value: req_seg,
+            }
+            match_params.append(param)
+        } else if (route_seg != req_seg) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+/// Get a parameter value from a RouteMatch by key.
+fn paramGet(m: RouteMatch, key: string) string {
+    var i: int = 0
+    while (i < m.params.count) {
+        var p = m.params.get(i)
+        if (p.key == key) {
+            return p.value
+        }
+        i += 1
+    }
+    return ""
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "exact path match" {
+    var r = Router.init()
+    var id = r.handle("GET /api/packages")
+    var m = r.match("GET", "/api/packages")
+    @assert(m.matched)
+    @assertEq(m.handler_id, id)
+}
+
+test "method filtering" {
+    var r = Router.init()
+    r.handle("GET /api/packages")
+    r.handle("POST /api/packages")
+    var m = r.match("DELETE", "/api/packages")
+    @assert(not m.matched)
+}
+
+test "path parameter extraction" {
+    var r = Router.init()
+    var id = r.handle("GET /api/packages/:name")
+    var m = r.match("GET", "/api/packages/json-utils")
+    @assert(m.matched)
+    @assertEq(m.handler_id, id)
+    @assertEq(paramGet(m, "name"), "json-utils")
+}
+
+test "multiple parameters" {
+    var r = Router.init()
+    var id = r.handle("GET /api/packages/:name/:version")
+    var m = r.match("GET", "/api/packages/json-utils/1.0.0")
+    @assert(m.matched)
+    @assertEq(paramGet(m, "name"), "json-utils")
+    @assertEq(paramGet(m, "version"), "1.0.0")
+}
+
+test "no match wrong path" {
+    var r = Router.init()
+    r.handle("GET /api/packages")
+    var m = r.match("GET", "/api/users")
+    @assert(not m.matched)
+}
+
+test "route specificity" {
+    var r = Router.init()
+    var general = r.handle("/api/packages/:name")
+    var specific = r.handle("GET /api/packages/:name")
+    var m = r.match("GET", "/api/packages/foo")
+    @assert(m.matched)
+    @assertEq(m.handler_id, specific)
+}
+
+test "wildcard route" {
+    var r = Router.init()
+    var id = r.handle("GET /static/*")
+    var m = r.match("GET", "/static/css/style.css")
+    @assert(m.matched)
+    @assertEq(m.handler_id, id)
+}
+
+test "root path" {
+    var r = Router.init()
+    var id = r.handle("GET /")
+    var m = r.match("GET", "/")
+    @assert(m.matched)
+    @assertEq(m.handler_id, id)
+}

@@ -1,0 +1,201 @@
+/// Package registry data models.
+///
+/// Ported from JSR api/src/db/models.rs (Package, PackageVersion).
+/// Structs for packages, versions, and dependencies — the core domain.
+
+import "std/string"
+import "std/list"
+import "std/json"
+
+/// A dependency declared in a package's cot.json.
+/// Ported from JSR PackageVersionDependency.
+struct Dependency {
+    name: string,
+    version_req: string,
+}
+
+/// Metadata for a specific published version.
+/// Ported from JSR PackageVersion.
+struct Version {
+    number: string,
+    published: string,
+    checksum: string,
+    dependencies: List(Dependency),
+}
+
+/// A package in the registry.
+/// Ported from JSR Package.
+struct Package {
+    name: string,
+    description: string,
+    author: string,
+    versions: List(Version),
+
+    /// Create a new package with no versions.
+    static fn init(name: string, description: string, author: string) Package {
+        var versions: List(Version) = .{}
+        return Package {
+            name: name,
+            description: description,
+            author: author,
+            versions: versions,
+        }
+    }
+
+    /// Get the latest version, or null if no versions published.
+    fn latest() ?Version {
+        if (self.versions.count == 0) { return null }
+        return self.versions.get(self.versions.count - 1)
+    }
+
+    /// Check if a specific version exists.
+    fn hasVersion(ver: string) bool {
+        var i: int = 0
+        while (i < self.versions.count) {
+            var v = self.versions.get(i)
+            if (v.number == ver) { return true }
+            i += 1
+        }
+        return false
+    }
+
+    /// Get a specific version by number.
+    fn getVersion(ver: string) ?Version {
+        var i: int = 0
+        while (i < self.versions.count) {
+            var v = self.versions.get(i)
+            if (v.number == ver) { return v }
+            i += 1
+        }
+        return null
+    }
+
+    /// Encode package metadata as JSON.
+    /// Ported from JSR API response format.
+    fn toJson() string {
+        var obj = jsonObject()
+        jsonObjectPut(obj, "name", jsonString(self.name))
+        jsonObjectPut(obj, "description", jsonString(self.description))
+        jsonObjectPut(obj, "author", jsonString(self.author))
+
+        var versions_arr = jsonArray()
+        var i: int = 0
+        while (i < self.versions.count) {
+            var v = self.versions.get(i)
+            var ver_obj = jsonObject()
+            jsonObjectPut(ver_obj, "version", jsonString(v.number))
+            jsonObjectPut(ver_obj, "published", jsonString(v.published))
+            jsonObjectPut(ver_obj, "checksum", jsonString(v.checksum))
+
+            var deps_arr = jsonArray()
+            var j: int = 0
+            while (j < v.dependencies.count) {
+                var dep = v.dependencies.get(j)
+                var dep_obj = jsonObject()
+                jsonObjectPut(dep_obj, "name", jsonString(dep.name))
+                jsonObjectPut(dep_obj, "version", jsonString(dep.version_req))
+                jsonArrayPush(deps_arr, dep_obj)
+                j += 1
+            }
+            jsonObjectPut(ver_obj, "dependencies", deps_arr)
+            jsonArrayPush(versions_arr, ver_obj)
+            i += 1
+        }
+        jsonObjectPut(obj, "versions", versions_arr)
+        var result = encode(obj)
+        jsonFree(obj)
+        return result
+    }
+}
+
+/// Validate a package name.
+/// Rules: lowercase alphanumeric + hyphens, 1-64 chars, no leading/trailing hyphens.
+/// Ported from JSR validate_package_name.
+fn isValidPackageName(name: string) bool {
+    var nlen = @lenOf(name)
+    if (nlen == 0 or nlen > 64) { return false }
+
+    // No leading or trailing hyphens
+    if (charAt(name, 0) == '-') { return false }
+    if (charAt(name, nlen - 1) == '-') { return false }
+
+    // Only lowercase letters, digits, and hyphens
+    var i: int = 0
+    while (i < nlen) {
+        var c = charAt(name, i)
+        var valid = (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '-'
+        if (not valid) { return false }
+        i += 1
+    }
+    return true
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "valid package names" {
+    @assert(isValidPackageName("json"))
+    @assert(isValidPackageName("my-lib"))
+    @assert(isValidPackageName("http-router"))
+    @assert(isValidPackageName("a"))
+}
+
+test "invalid package names" {
+    @assert(not isValidPackageName(""))
+    @assert(not isValidPackageName("-leading"))
+    @assert(not isValidPackageName("trailing-"))
+    @assert(not isValidPackageName("UPPERCASE"))
+    @assert(not isValidPackageName("has space"))
+    @assert(not isValidPackageName("has.dot"))
+}
+
+test "package has version" {
+    var pkg = Package.init("test", "A test package", "alice")
+    @assert(not pkg.hasVersion("1.0.0"))
+
+    var deps: List(Dependency) = .{}
+    var ver = Version {
+        number: "1.0.0",
+        published: "2026-03-01T00:00:00Z",
+        checksum: "sha256:abc",
+        dependencies: deps,
+    }
+    pkg.versions.append(ver)
+    @assert(pkg.hasVersion("1.0.0"))
+    @assert(not pkg.hasVersion("2.0.0"))
+}
+
+test "package latest version" {
+    var pkg = Package.init("test", "desc", "bob")
+    var none = pkg.latest()
+    @assert(none == null)
+
+    var deps: List(Dependency) = .{}
+    var v1 = Version {
+        number: "1.0.0",
+        published: "2026-03-01T00:00:00Z",
+        checksum: "sha256:abc",
+        dependencies: deps,
+    }
+    pkg.versions.append(v1)
+
+    if (pkg.latest()) |latest| {
+        @assertEq(latest.number, "1.0.0")
+    }
+}
+
+test "package to json" {
+    var pkg = Package.init("json-utils", "JSON utilities", "alice")
+    var deps: List(Dependency) = .{}
+    var ver = Version {
+        number: "1.0.0",
+        published: "2026-03-01T00:00:00Z",
+        checksum: "sha256:abc123",
+        dependencies: deps,
+    }
+    pkg.versions.append(ver)
+    var json_str = pkg.toJson()
+    @assert(contains(json_str, "json-utils"))
+    @assert(contains(json_str, "1.0.0"))
+}
