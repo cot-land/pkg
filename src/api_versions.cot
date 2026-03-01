@@ -7,12 +7,15 @@ import "std/list"
 import "std/json"
 import "std/time"
 import "std/log"
+import "std/crypto"
+import "std/fs"
 import "response"
 import "request"
 import "router"
 import "registry"
 import "package"
 import "files"
+import "semver_check"
 
 /// GET /api/packages/:name/:version — get specific version metadata.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package/versions/:version.
@@ -52,6 +55,11 @@ fn handleGetVersion(reg: *Registry, name: string, version: string) string {
 /// Expects JSON body with optional dependencies.
 /// Creates version metadata. File upload handled separately.
 fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Request) string {
+    // Validate semver — ported from JSR publish-time validation
+    if (not isValidSemver(version)) {
+        return badRequest("invalid semver version")
+    }
+
     // Check package exists
     if (not reg.has(name)) {
         return notFound()
@@ -65,12 +73,32 @@ fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Requ
         }
     }
 
-    // Parse optional dependencies from body
+    // Parse body as cot.json manifest
     var deps: List(Dependency) = .{}
     var body = req.body
+    var has_manifest = false
     if (@lenOf(body) > 0) {
         var root = parse(body)
         if (root != 0 and jsonTag(root) == JSON_OBJECT) {
+            has_manifest = true
+
+            // Validate required manifest fields
+            var manifest_name = jsonObjectGetString(root, "name")
+            var manifest_version = jsonObjectGetString(root, "version")
+
+            // Name in manifest must match URL
+            if (@lenOf(manifest_name) > 0 and manifest_name != name) {
+                jsonFree(root)
+                return badRequest("manifest name does not match URL")
+            }
+
+            // Version in manifest must match URL
+            if (@lenOf(manifest_version) > 0 and manifest_version != version) {
+                jsonFree(root)
+                return badRequest("manifest version does not match URL")
+            }
+
+            // Extract dependencies
             var deps_json = jsonObjectGet(root, "dependencies")
             if (deps_json != 0 and jsonTag(deps_json) == JSON_OBJECT) {
                 var dep_keys = jsonObjectKeys(deps_json)
@@ -90,19 +118,25 @@ fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Requ
         }
     }
 
+    // Compute SHA-256 checksum of published content
+    var checksum = ""
+    if (@lenOf(body) > 0) {
+        checksum = "sha256:${sha256(body)}"
+    }
+
     // Create version with timestamp
     var ver = Version {
         number: version,
         published: intToString(milliTimestamp()),
-        checksum: "",
+        checksum: checksum,
         dependencies: deps,
     }
 
     if (reg.addVersion(name, ver)) {
-        // Store the request body as the package content
-        if (@lenOf(req.body) > 0) {
-            storePackageFile(name, version, "package.cot", req.body) catch {
-                logError("failed to store package file")
+        // Store the manifest as cot.json
+        if (has_manifest and @lenOf(body) > 0) {
+            storePackageFile(name, version, "cot.json", body) catch {
+                logError("failed to store cot.json")
             }
         }
 
@@ -110,11 +144,43 @@ fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Requ
         jsonObjectPut(result, "package", jsonString(name))
         jsonObjectPut(result, "version", jsonString(version))
         jsonObjectPut(result, "published", jsonBool(true))
+        if (@lenOf(checksum) > 0) {
+            jsonObjectPut(result, "checksum", jsonString(checksum))
+        }
         var resp_body = encode(result)
         jsonFree(result)
         return jsonResponse(201, resp_body)
     }
 
     return serverError()
+}
+
+/// GET /api/packages/:name/:version/files — list files in a published version.
+/// Ported from JSR source file browsing.
+fn handleListFiles(name: string, version: string) string {
+    var dir = versionPath(name, version)
+    var entries: List(string) = .{}
+    listDir(dir, &entries) catch {
+        return notFound()
+    }
+
+    var arr = jsonArray()
+    var i: int = 0
+    while (i < entries.count) {
+        jsonArrayPush(arr, jsonString(entries.get(i)))
+        i += 1
+    }
+    var body = encode(arr)
+    jsonFree(arr)
+    return jsonResponse(200, body)
+}
+
+/// GET /api/packages/:name/:version/files/:path — serve a single source file.
+/// Ported from JSR source file serving.
+fn handleGetFile(name: string, version: string, file_path: string) string {
+    var content = readPackageFile(name, version, file_path) catch {
+        return notFound()
+    }
+    return textResponse(200, content)
 }
 

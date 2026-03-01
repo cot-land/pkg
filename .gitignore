@@ -2,6 +2,8 @@ stdlib
 references/
 data/
 pkg
+cli/stdlib
+cli/pkg-cli
 *.dylib
 .DS_Store
 server.log

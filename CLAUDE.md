@@ -72,11 +72,18 @@ ln -s ~/cotlang/cot/stdlib stdlib
 ## CLI
 
 ```
+# Registry server
 cot check src/main.cot              # Type-check the full project
 cot test src/router.cot             # Run router tests
-cot test src/util/semver.cot        # Run semver tests
+cot test src/request.cot            # Run request parsing tests
 cot build src/main.cot -o pkg       # Build the server binary
 ./pkg                               # Start server on port 8080
+
+# CLI tool
+cd cli/
+cot check src/main.cot              # Type-check CLI
+cot build src/main.cot -o pkg-cli   # Build CLI binary
+./pkg-cli help                      # Show CLI usage
 ```
 
 ## Architecture
@@ -99,6 +106,11 @@ src/api_auth.cot          Token validation, Bearer auth
 src/web_pages.cot         HTML pages (landing, package list, detail, search)
 src/web_templates.cot     HTML template helpers (head, nav, footer, layout)
 src/web_static.cot        Static file serving (CSS)
+src/semver_check.cot      Semver validation (manual, avoids std/semver name collision)
+
+cli/src/main.cot          CLI entry point, argument parsing
+cli/src/commands.cot      All CLI commands (init, publish, add, search, etc.)
+cli/src/http_client.cot   HTTP client for registry API calls
 ```
 
 **Note:** All source files are flat in `src/` because Cot resolves imports relative to the importing file's directory. No `..` import paths. This matches cotty's pattern.
@@ -107,8 +119,10 @@ src/web_static.cot        Static file serving (CSS)
 HTTP Request → server.cot (accept + read)
   → request.cot (parse into Request struct)
   → router.cot (match route pattern, extract params)
-  → handler (api/*.cot or web/*.cot)
-    → storage/*.cot (data access)
+  → main.cot dispatch() (handler ID switch)
+    → api_packages.cot / api_versions.cot / api_search.cot (API handlers)
+    → web_pages.cot (HTML page handlers)
+    → registry.cot / files.cot (data access)
     → response.cot (build Response)
   → server.cot (write response, close connection)
 ```
@@ -121,28 +135,28 @@ HTTP Request → server.cot (accept + read)
 | `src/router.cot` | `net/http/routing_tree.go` (ServeMux pattern matching) |
 | `src/request.cot` | `net/http/request.go` (ReadRequest, parseForm) |
 | `src/response.cot` | `net/http/server.go` (response.Write, WriteHeader) |
-| `src/util/semver.cot` | `golang.org/x/mod/semver` (parse, compare) |
-| `src/util/tar.cot` | `archive/tar` (Header, Reader, Writer) |
-| `src/storage/registry.cot` | Go module index (in-memory map + JSON persistence) |
+| `src/registry.cot` | Go module index (in-memory map + JSON persistence) |
+| `src/files.cot` | Go module cache (package file storage on disk) |
 
 ## Testing
 
 ```bash
-cot test src/router.cot            # Router pattern matching
-cot test src/request.cot           # Query string parsing
-cot test src/response.cot          # Response building
-cot test src/util/semver.cot       # Semver parsing + comparison
-cot check src/main.cot             # Full type-check
+cot test src/router.cot            # Router pattern matching (15 tests)
+cot test src/request.cot           # Query string parsing (6 tests)
+cot test src/response.cot          # Response building (9 tests)
+cot test src/registry.cot          # Registry persistence (5 tests)
+cot test src/search_index.cot      # Search matching (7 tests)
+cot check src/main.cot             # Full type-check (all files)
 ```
 
-Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them.
+Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them. 52 tests pass total.
 
 ## Documents
 
 | Document | Purpose |
 |----------|---------|
-| `claude/API_DESIGN.md` | REST API design, endpoints, request/response formats |
-| `~/cotlang/cot/claude/PKG_COMPILER_BUGS.md` | Compiler bugs found during pkg development |
+| `~/cotlang/cot/claude/PKG_COMPILER_BUGS.md` | Compiler bugs found during pkg development (all fixed) |
+| `references/jsr/` | Shallow clone of JSR registry — reference architecture |
 
 ## Behavioral Guidelines
 

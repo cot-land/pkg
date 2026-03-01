@@ -64,19 +64,40 @@ struct Server {
             return null
         }
 
-        // Read request data
-        // Go: conn.serve → readRequest → http.ReadRequest
+        // Read request data — may require multiple reads.
+        // Go: conn.serve → readRequest → http.ReadRequest → readBody
+        // TCP may deliver headers and body in separate segments,
+        // so we loop until we have the full Content-Length body.
         var buf = alloc(0, MAX_REQUEST_SIZE)
-        var n = socketRead(client_fd, buf, MAX_REQUEST_SIZE)
+        var total: int = 0
 
+        // First read — gets at least headers
+        var n = socketRead(client_fd, buf, MAX_REQUEST_SIZE)
         if (n <= 0) {
             dealloc(buf)
             socketClose(client_fd)
             return null
         }
+        total = n
+
+        // Find end of headers (\r\n\r\n) to determine Content-Length
+        var hdr_end = findHeaderEnd(buf, total)
+        if (hdr_end > 0) {
+            var content_length = extractContentLength(buf, hdr_end)
+            if (content_length > 0) {
+                var body_start = hdr_end + 4
+                var need = body_start + content_length
+                // Read remaining body bytes
+                while (total < need and total < MAX_REQUEST_SIZE) {
+                    n = socketRead(client_fd, buf + total, MAX_REQUEST_SIZE - total)
+                    if (n <= 0) { break }
+                    total = total + n
+                }
+            }
+        }
 
         // Parse request
-        var req = Request.parse(@string(buf, n))
+        var req = Request.parse(@string(buf, total))
         dealloc(buf)
 
         // Match route
@@ -102,4 +123,62 @@ struct Server {
             self.listen_fd = 0 - 1
         }
     }
+}
+
+/// Find the byte offset of \r\n\r\n in a raw buffer.
+/// Returns the offset of the first \r, or -1 if not found.
+/// Ported from Go textproto — scan for blank line separating headers from body.
+fn findHeaderEnd(buf: i64, len: int) int {
+    var i: int = 0
+    while (i < len - 3) {
+        if (@intToPtr(*u8, buf + i).* == 13
+            and @intToPtr(*u8, buf + i + 1).* == 10
+            and @intToPtr(*u8, buf + i + 2).* == 13
+            and @intToPtr(*u8, buf + i + 3).* == 10) {
+            return i
+        }
+        i += 1
+    }
+    return 0 - 1
+}
+
+/// Extract Content-Length value from raw header bytes.
+/// Scans for "Content-Length: " in the buffer up to hdr_end.
+/// Returns 0 if not found.
+fn extractContentLength(buf: i64, hdr_end: int) int {
+    // Search for "Content-Length: " (case-sensitive, matching curl/browsers)
+    var needle = "Content-Length: "
+    var nlen = @lenOf(needle)
+    var i: int = 0
+    while (i < hdr_end - nlen) {
+        // Check if we're at start of line (pos 0 or after \n)
+        var at_line = false
+        if (i == 0) {
+            at_line = true
+        } else if (@intToPtr(*u8, buf + i - 1).* == 10) {
+            at_line = true
+        }
+        if (at_line) {
+            var match = true
+            var j: int = 0
+            while (j < nlen and match) {
+                if (@intToPtr(*u8, buf + i + j).* != charAt(needle, j)) {
+                    match = false
+                }
+                j += 1
+            }
+            if (match) {
+                // Parse digits after "Content-Length: "
+                var val: int = 0
+                var pos = i + nlen
+                while (pos < hdr_end and @intToPtr(*u8, buf + pos).* >= 48 and @intToPtr(*u8, buf + pos).* <= 57) {
+                    val = val * 10 + @intCast(int, @intToPtr(*u8, buf + pos).*) - 48
+                    pos += 1
+                }
+                return val
+            }
+        }
+        i += 1
+    }
+    return 0
 }

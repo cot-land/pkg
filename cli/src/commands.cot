@@ -1,0 +1,645 @@
+/// CLI command implementations.
+///
+/// Each command reads local state (cot.json, credentials) and
+/// calls the registry API via http_client.
+
+import "std/string"
+import "std/list"
+import "std/fs"
+import "std/json"
+import "std/os"
+import "std/sys"
+import "http_client"
+
+/// Registry connection settings.
+const REGISTRY_HOST: string = "localhost"
+const REGISTRY_PORT: int = 8080
+
+// ============================================================================
+// pkg init
+// ============================================================================
+
+/// Create a cot.json in the current directory.
+fn cmdInit() void {
+    if (fileExists("cot.json")) {
+        eprintln("cot.json already exists")
+        exit(1)
+    }
+
+    var content = "{\n  \"name\": \"my-package\",\n  \"version\": \"0.1.0\",\n  \"main\": \"src/main.cot\",\n  \"safe\": true\n}\n"
+    writeFile("cot.json", content) catch {
+        eprintln("failed to write cot.json")
+        exit(1)
+    }
+    println("Created cot.json")
+}
+
+// ============================================================================
+// pkg search
+// ============================================================================
+
+/// Search for packages on the registry.
+fn cmdSearch(query: string) void {
+    var path_sb: StringBuilder = .{}
+    path_sb.append("/api/search?q=")
+    path_sb.append(query)
+    var resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, path_sb.toString())
+
+    if (not resp.ok) {
+        eprintln("Search failed (status ${intToString(resp.status)})")
+        exit(1)
+    }
+
+    var root = parse(resp.body)
+    if (root == 0) {
+        eprintln("Invalid response from registry")
+        exit(1)
+    }
+
+    if (jsonTag(root) == JSON_ARRAY) {
+        var count = jsonArrayLen(root)
+        if (count == 0) {
+            println("No packages found.")
+            jsonFree(root)
+            return
+        }
+        var i: int = 0
+        while (i < count) {
+            var item = jsonArrayGet(root, i)
+            var name = jsonObjectGetString(item, "name")
+            var desc = jsonObjectGetString(item, "description")
+            var sb: StringBuilder = .{}
+            sb.append("  ")
+            sb.append(name)
+            if (@lenOf(desc) > 0) {
+                sb.append(" — ")
+                sb.append(desc)
+            }
+            println(sb.toString())
+            i += 1
+        }
+    }
+    jsonFree(root)
+}
+
+// ============================================================================
+// pkg info
+// ============================================================================
+
+/// Show details for a package.
+fn cmdInfo(name: string) void {
+    var path_sb: StringBuilder = .{}
+    path_sb.append("/api/packages/")
+    path_sb.append(name)
+    var resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, path_sb.toString())
+
+    if (resp.status == 404) {
+        eprintln("Package '${name}' not found")
+        exit(1)
+    }
+    if (not resp.ok) {
+        eprintln("Failed to fetch package (status ${intToString(resp.status)})")
+        exit(1)
+    }
+
+    var root = parse(resp.body)
+    if (root == 0) {
+        eprintln("Invalid response")
+        exit(1)
+    }
+
+    var pkg_name = jsonObjectGetString(root, "name")
+    var desc = jsonObjectGetString(root, "description")
+    var author = jsonObjectGetString(root, "author")
+
+    println(pkg_name)
+    if (@lenOf(desc) > 0) {
+        println("  ${desc}")
+    }
+    if (@lenOf(author) > 0) {
+        println("  by ${author}")
+    }
+
+    // List versions
+    var versions = jsonObjectGet(root, "versions")
+    if (versions != 0 and jsonTag(versions) == JSON_ARRAY) {
+        var count = jsonArrayLen(versions)
+        println("")
+        println("  Versions:")
+        var i: int = 0
+        while (i < count) {
+            var v = jsonArrayGet(versions, i)
+            var ver = jsonObjectGetString(v, "version")
+            println("    ${ver}")
+            i += 1
+        }
+    }
+
+    jsonFree(root)
+}
+
+// ============================================================================
+// pkg publish
+// ============================================================================
+
+/// Publish the current package to the registry.
+fn cmdPublish() void {
+    // Read cot.json
+    var manifest = readFile("cot.json") catch {
+        eprintln("No cot.json found. Run 'pkg init' first.")
+        exit(1)
+        return
+    }
+
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        eprintln("Invalid cot.json")
+        exit(1)
+    }
+
+    var name = jsonObjectGetString(root, "name")
+    var version = jsonObjectGetString(root, "version")
+    jsonFree(root)
+
+    if (@lenOf(name) == 0 or @lenOf(version) == 0) {
+        eprintln("cot.json must have 'name' and 'version' fields")
+        exit(1)
+    }
+
+    // Read auth token
+    var token = readToken()
+    if (@lenOf(token) == 0) {
+        eprintln("Not logged in. Run 'pkg login' first.")
+        exit(1)
+    }
+
+    println("Publishing ${name}@${version}...")
+
+    // Create package if it doesn't exist
+    var create_body_sb: StringBuilder = .{}
+    create_body_sb.append("{\"name\":\"")
+    create_body_sb.append(name)
+    create_body_sb.append("\"}")
+    var create_resp = httpPost(REGISTRY_HOST, REGISTRY_PORT, "/api/packages", create_body_sb.toString(), token)
+    // 409 = already exists, that's fine
+    if (not create_resp.ok and create_resp.status != 409) {
+        eprintln("Failed to create package (status ${intToString(create_resp.status)})")
+        exit(1)
+    }
+
+    // Publish version — send the cot.json manifest as the body
+    var publish_path: StringBuilder = .{}
+    publish_path.append("/api/packages/")
+    publish_path.append(name)
+    publish_path.append("/")
+    publish_path.append(version)
+    var pub_resp = httpPost(REGISTRY_HOST, REGISTRY_PORT, publish_path.toString(), manifest, token)
+
+    if (not pub_resp.ok) {
+        eprintln("Publish failed: ${pub_resp.body}")
+        exit(1)
+    }
+
+    println("Published ${name}@${version}")
+}
+
+// ============================================================================
+// pkg add
+// ============================================================================
+
+/// Add a dependency to cot.json and download it.
+fn cmdAdd(spec: string) void {
+    // Parse name[@version]
+    var name = spec
+    var version = ""
+    var at_idx = indexOf(spec, "@")
+    if (at_idx > 0) {
+        name = substring(spec, 0, at_idx)
+        version = substring(spec, at_idx + 1, @lenOf(spec))
+    }
+
+    // Fetch package info to find the latest version if not specified
+    var info_path: StringBuilder = .{}
+    info_path.append("/api/packages/")
+    info_path.append(name)
+    var resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, info_path.toString())
+
+    if (resp.status == 404) {
+        eprintln("Package '${name}' not found")
+        exit(1)
+    }
+    if (not resp.ok) {
+        eprintln("Failed to fetch package (status ${intToString(resp.status)})")
+        exit(1)
+    }
+
+    var root = parse(resp.body)
+    if (root == 0) {
+        eprintln("Invalid response")
+        exit(1)
+    }
+
+    // Find version to install
+    if (@lenOf(version) == 0) {
+        // Use latest version
+        var versions = jsonObjectGet(root, "versions")
+        if (versions != 0 and jsonTag(versions) == JSON_ARRAY) {
+            var count = jsonArrayLen(versions)
+            if (count > 0) {
+                var latest = jsonArrayGet(versions, count - 1)
+                version = jsonObjectGetString(latest, "version")
+            }
+        }
+    }
+    jsonFree(root)
+
+    if (@lenOf(version) == 0) {
+        eprintln("No versions published for '${name}'")
+        exit(1)
+    }
+
+    println("Adding ${name}@${version}...")
+
+    // Download package files
+    downloadPackage(name, version)
+
+    // Update cot.json
+    addDependency(name, version)
+
+    println("Added ${name}@${version}")
+}
+
+// ============================================================================
+// pkg install
+// ============================================================================
+
+/// Install all dependencies from cot.json.
+fn cmdInstall() void {
+    var manifest = readFile("cot.json") catch {
+        eprintln("No cot.json found")
+        exit(1)
+        return
+    }
+
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        eprintln("Invalid cot.json")
+        exit(1)
+    }
+
+    var deps = jsonObjectGet(root, "dependencies")
+    if (deps == 0 or jsonTag(deps) != JSON_OBJECT) {
+        println("No dependencies to install.")
+        jsonFree(root)
+        return
+    }
+
+    var dep_keys = jsonObjKeys(deps)
+    if (dep_keys.count == 0) {
+        println("No dependencies to install.")
+        jsonFree(root)
+        return
+    }
+
+    var i: int = 0
+    while (i < dep_keys.count) {
+        var dep_name = dep_keys.get(i)
+        var dep_ver = jsonObjectGetString(deps, dep_name)
+        println("Installing ${dep_name}@${dep_ver}...")
+        downloadPackage(dep_name, dep_ver)
+        i += 1
+    }
+
+    jsonFree(root)
+    println("Done.")
+}
+
+// ============================================================================
+// pkg remove
+// ============================================================================
+
+/// Remove a dependency from cot.json.
+fn cmdRemove(name: string) void {
+    var manifest = readFile("cot.json") catch {
+        eprintln("No cot.json found")
+        exit(1)
+        return
+    }
+
+    // Simple approach: read as text, rebuild without the dependency
+    // Full JSON manipulation would require jsonObjectRemove which doesn't exist
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        eprintln("Invalid cot.json")
+        exit(1)
+    }
+
+    var deps = jsonObjectGet(root, "dependencies")
+    if (deps == 0 or jsonTag(deps) != JSON_OBJECT) {
+        eprintln("No dependencies in cot.json")
+        jsonFree(root)
+        exit(1)
+    }
+
+    // Check if dependency exists
+    var existing = jsonObjectGetString(deps, name)
+    if (@lenOf(existing) == 0) {
+        eprintln("'${name}' is not a dependency")
+        jsonFree(root)
+        exit(1)
+    }
+
+    // Rebuild cot.json without this dependency
+    var dep_keys = jsonObjKeys(deps)
+    var new_deps = jsonObject()
+    var i: int = 0
+    while (i < dep_keys.count) {
+        var key = dep_keys.get(i)
+        if (key != name) {
+            jsonObjectPut(new_deps, key, jsonString(jsonObjectGetString(deps, key)))
+        }
+        i += 1
+    }
+
+    // Rebuild root with new deps
+    var pkg_name = jsonObjectGetString(root, "name")
+    var pkg_version = jsonObjectGetString(root, "version")
+    var pkg_main = jsonObjectGetString(root, "main")
+    jsonFree(root)
+
+    var new_root = jsonObject()
+    jsonObjectPut(new_root, "name", jsonString(pkg_name))
+    jsonObjectPut(new_root, "version", jsonString(pkg_version))
+    if (@lenOf(pkg_main) > 0) {
+        jsonObjectPut(new_root, "main", jsonString(pkg_main))
+    }
+    jsonObjectPut(new_root, "safe", jsonBool(true))
+    jsonObjectPut(new_root, "dependencies", new_deps)
+
+    var json_str = encode(new_root)
+    jsonFree(new_root)
+
+    writeFile("cot.json", json_str) catch {
+        eprintln("Failed to write cot.json")
+        exit(1)
+    }
+    println("Removed ${name}")
+}
+
+// ============================================================================
+// pkg list
+// ============================================================================
+
+/// List installed dependencies.
+fn cmdList() void {
+    var manifest = readFile("cot.json") catch {
+        eprintln("No cot.json found")
+        exit(1)
+        return
+    }
+
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        eprintln("Invalid cot.json")
+        exit(1)
+    }
+
+    var deps = jsonObjectGet(root, "dependencies")
+    if (deps == 0 or jsonTag(deps) != JSON_OBJECT) {
+        println("No dependencies.")
+        jsonFree(root)
+        return
+    }
+
+    var dep_keys = jsonObjKeys(deps)
+    if (dep_keys.count == 0) {
+        println("No dependencies.")
+        jsonFree(root)
+        return
+    }
+
+    println("Dependencies:")
+    var i: int = 0
+    while (i < dep_keys.count) {
+        var dep_name = dep_keys.get(i)
+        var dep_ver = jsonObjectGetString(deps, dep_name)
+        println("  ${dep_name} ${dep_ver}")
+        i += 1
+    }
+    jsonFree(root)
+}
+
+// ============================================================================
+// pkg login
+// ============================================================================
+
+/// Store an auth token.
+fn cmdLogin() void {
+    if (argsCount() < 3) {
+        eprintln("Usage: pkg login <token>")
+        exit(1)
+    }
+    var token = arg(2)
+
+    // Store in ~/.cot/credentials
+    var home = getHome()
+    if (@lenOf(home) == 0) {
+        eprintln("Cannot determine home directory")
+        exit(1)
+    }
+
+    var dir_sb: StringBuilder = .{}
+    dir_sb.append(home)
+    dir_sb.append("/.cot")
+    makeDirAll(dir_sb.toString()) catch {
+        eprintln("Failed to create ~/.cot directory")
+        exit(1)
+    }
+
+    var path_sb: StringBuilder = .{}
+    path_sb.append(home)
+    path_sb.append("/.cot/credentials")
+    writeFile(path_sb.toString(), token) catch {
+        eprintln("Failed to write credentials")
+        exit(1)
+    }
+    println("Token saved to ~/.cot/credentials")
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Get HOME environment variable by scanning environ.
+fn getHome() string {
+    var count = environCount()
+    var i: int = 0
+    while (i < count) {
+        var entry = env(i)
+        if (startsWith(entry, "HOME=")) {
+            return substring(entry, 5, @lenOf(entry))
+        }
+        i += 1
+    }
+    return ""
+}
+
+/// Read the auth token from ~/.cot/credentials.
+fn readToken() string {
+    var home = getHome()
+    if (@lenOf(home) == 0) { return "" }
+
+    var path_sb: StringBuilder = .{}
+    path_sb.append(home)
+    path_sb.append("/.cot/credentials")
+    var token = readFile(path_sb.toString()) catch {
+        return ""
+    }
+    return trimRight(token)
+}
+
+/// Download a package's files into ~/.cache/cot/packages/<name>/<version>/.
+fn downloadPackage(name: string, version: string) void {
+    // Build cache directory: ~/.cache/cot/packages/<name>/<version>/
+    var home = getHome()
+    if (@lenOf(home) == 0) {
+        eprintln("Cannot determine home directory")
+        exit(1)
+    }
+
+    var dir_sb: StringBuilder = .{}
+    dir_sb.append(home)
+    dir_sb.append("/.cache/cot/packages/")
+    dir_sb.append(name)
+    dir_sb.append("/")
+    dir_sb.append(version)
+    var cache_dir = dir_sb.toString()
+    makeDirAll(cache_dir) catch {
+        eprintln("Failed to create ${cache_dir}")
+        exit(1)
+    }
+
+    // Fetch file list
+    var files_path: StringBuilder = .{}
+    files_path.append("/api/packages/")
+    files_path.append(name)
+    files_path.append("/")
+    files_path.append(version)
+    files_path.append("/files")
+    var resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, files_path.toString())
+
+    if (not resp.ok) {
+        eprintln("Failed to fetch file list for ${name}@${version}")
+        return
+    }
+
+    var root = parse(resp.body)
+    if (root == 0 or jsonTag(root) != JSON_ARRAY) {
+        eprintln("Invalid file list response")
+        return
+    }
+
+    var count = jsonArrayLen(root)
+    var i: int = 0
+    while (i < count) {
+        var file_node = jsonArrayGet(root, i)
+        var file_name = jsonGetString(file_node)
+
+        // Fetch file content
+        var file_path_sb: StringBuilder = .{}
+        file_path_sb.append("/api/packages/")
+        file_path_sb.append(name)
+        file_path_sb.append("/")
+        file_path_sb.append(version)
+        file_path_sb.append("/files/")
+        file_path_sb.append(file_name)
+        var file_resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, file_path_sb.toString())
+
+        if (file_resp.ok) {
+            // Write to ~/.cache/cot/packages/<name>/<version>/<file>
+            var dest_sb: StringBuilder = .{}
+            dest_sb.append(cache_dir)
+            dest_sb.append("/")
+            dest_sb.append(file_name)
+            writeFile(dest_sb.toString(), file_resp.body) catch {
+                eprintln("  Failed to write ${file_name}")
+            }
+        }
+        i += 1
+    }
+    jsonFree(root)
+}
+
+/// Add a dependency to cot.json.
+fn addDependency(name: string, version: string) void {
+    var manifest = readFile("cot.json") catch {
+        return
+    }
+
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) { return }
+
+    // Rebuild cot.json with the new dependency added
+    var pkg_name = jsonObjectGetString(root, "name")
+    var pkg_version = jsonObjectGetString(root, "version")
+    var pkg_main = jsonObjectGetString(root, "main")
+
+    // Collect existing dependencies
+    var deps = jsonObjectGet(root, "dependencies")
+    var new_deps = jsonObject()
+    if (deps != 0 and jsonTag(deps) == JSON_OBJECT) {
+        var dep_keys = jsonObjKeys(deps)
+        var i: int = 0
+        while (i < dep_keys.count) {
+            var key = dep_keys.get(i)
+            jsonObjectPut(new_deps, key, jsonString(jsonObjectGetString(deps, key)))
+            i += 1
+        }
+    }
+    // Add/update the new dependency
+    jsonObjectPut(new_deps, name, jsonString(version))
+    jsonFree(root)
+
+    var new_root = jsonObject()
+    jsonObjectPut(new_root, "name", jsonString(pkg_name))
+    jsonObjectPut(new_root, "version", jsonString(pkg_version))
+    if (@lenOf(pkg_main) > 0) {
+        jsonObjectPut(new_root, "main", jsonString(pkg_main))
+    }
+    jsonObjectPut(new_root, "safe", jsonBool(true))
+    jsonObjectPut(new_root, "dependencies", new_deps)
+
+    var json_str = encode(new_root)
+    jsonFree(new_root)
+
+    writeFile("cot.json", json_str) catch {
+        eprintln("Failed to update cot.json")
+    }
+}
+
+/// Get keys of a JSON object.
+/// Named jsonObjKeys to avoid collision with registry.cot's jsonObjectKeys.
+fn jsonObjKeys(obj: i64) List(string) {
+    var result: List(string) = .{}
+    var keys_p = @intToPtr(*i64, obj + 8).*
+    var k_items = @intToPtr(*i64, keys_p).*
+    var k_count = @intToPtr(*i64, keys_p + 8).*
+    var i: int = 0
+    while (i < k_count) {
+        var kptr = @intToPtr(*i64, k_items + i * 16).*
+        var klen = @intToPtr(*i64, k_items + i * 16 + 8).*
+        result.append(@string(kptr, klen))
+        i += 1
+    }
+    return result
+}
+
+fn println(s: string) void {
+    fd_write(1, @ptrOf(s), @lenOf(s))
+    fd_write(1, @ptrOf("\n"), 1)
+}
+
+fn eprintln(s: string) void {
+    eprint(s)
+    eprint("\n")
+}

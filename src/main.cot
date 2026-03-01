@@ -43,6 +43,8 @@ var ROUTE_API_PACKAGE_VERSION: int = 0
 var ROUTE_API_SEARCH: int = 0
 var ROUTE_API_PUBLISH: int = 0
 var ROUTE_API_CREATE_PACKAGE: int = 0
+var ROUTE_API_FILES: int = 0
+var ROUTE_VERSION_DETAIL_PAGE: int = 0
 
 fn main() void {
     // Handle CLI arguments
@@ -87,6 +89,8 @@ fn main() void {
     ROUTE_API_SEARCH = r.handle("GET /api/search")
     ROUTE_API_PUBLISH = r.handle("POST /api/packages/:name/:version")
     ROUTE_API_CREATE_PACKAGE = r.handle("POST /api/packages")
+    ROUTE_API_FILES = r.handle("GET /api/packages/:name/:version/files/*")
+    ROUTE_VERSION_DETAIL_PAGE = r.handle("GET /packages/:name/:version")
 
     // Start listening
     srv.listen() catch {
@@ -186,6 +190,32 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
         var params = parseQuery(req.raw_query)
         var q = queryGet(params, "q")
         return handleSearch(reg, q)
+    }
+    if (id == ROUTE_API_FILES) {
+        var name = paramGet(route, "name")
+        var version = paramGet(route, "version")
+        // Extract file path from URL: /api/packages/:name/:version/files/...
+        var prefix = "/api/packages/${name}/${version}/files"
+        if (@lenOf(req.path) > @lenOf(prefix) + 1) {
+            // Has a file path after /files/
+            var fp = substring(req.path, @lenOf(prefix) + 1, @lenOf(req.path))
+            if (contains(fp, "..")) {
+                return badRequest("invalid file path")
+            }
+            return handleGetFile(name, version, fp)
+        }
+        // Just /files — list files
+        return handleListFiles(name, version)
+    }
+    if (id == ROUTE_VERSION_DETAIL_PAGE) {
+        var name = paramGet(route, "name")
+        var version = paramGet(route, "version")
+        if (reg.get(name)) |pkg| {
+            if (pkg.getVersion(version)) |ver| {
+                return htmlResponse(200, versionDetailPage(pkg, ver))
+            }
+        }
+        return htmlResponse(404, notFoundPage())
     }
     if (id == ROUTE_API_PUBLISH) {
         // Auth required — ported from JSR publish auth check

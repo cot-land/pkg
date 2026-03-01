@@ -1,0 +1,143 @@
+/// HTTP client — make GET and POST requests to the registry.
+///
+/// Ported from Go net/http.Client (simplified to raw TCP).
+/// Uses tcpConnect + socketWriteString + socketRead for HTTP/1.1 requests.
+
+import "std/http"
+import "std/string"
+import "std/sys"
+import "std/log"
+
+/// Maximum response size (256 KB).
+const MAX_RESPONSE_SIZE: int = 262144
+
+/// HTTP response from the registry.
+struct HttpResponse {
+    status: int,
+    body: string,
+    ok: bool,
+}
+
+/// Make an HTTP GET request.
+/// Ported from Go http.Get.
+fn httpGet(host: string, port: int, path: string) HttpResponse {
+    return httpRequest("GET", host, port, path, "", "")
+}
+
+/// Make an HTTP POST request with JSON body.
+/// Ported from Go http.Post.
+fn httpPost(host: string, port: int, path: string, body: string, token: string) HttpResponse {
+    return httpRequest("POST", host, port, path, body, token)
+}
+
+/// Make an HTTP request.
+fn httpRequest(method: string, host: string, port: int, path: string, body: string, token: string) HttpResponse {
+    var fail = HttpResponse { status: 0, body: "", ok: false }
+
+    // Connect
+    // tcpConnect takes IP as integer — 127.0.0.1 = 0x7F000001
+    var fd = tcpConnect(2130706433, port) catch {
+        return fail
+    }
+
+    // Build request
+    var sb: StringBuilder = .{}
+    sb.append(method)
+    sb.append(" ")
+    sb.append(path)
+    sb.append(" HTTP/1.1\r\n")
+    sb.append("Host: ")
+    sb.append(host)
+    sb.append("\r\n")
+    sb.append("Connection: close\r\n")
+
+    if (@lenOf(token) > 0) {
+        sb.append("Authorization: Bearer ")
+        sb.append(token)
+        sb.append("\r\n")
+    }
+
+    if (@lenOf(body) > 0) {
+        sb.append("Content-Type: application/json\r\n")
+        sb.append("Content-Length: ")
+        sb.appendInt(@lenOf(body))
+        sb.append("\r\n")
+    }
+
+    sb.append("\r\n")
+
+    if (@lenOf(body) > 0) {
+        sb.append(body)
+    }
+
+    var req_str = sb.toString()
+    socketWriteString(fd, req_str)
+
+    // Read response — loop until connection closes
+    var buf = alloc(0, MAX_RESPONSE_SIZE)
+    var total: int = 0
+    while (total < MAX_RESPONSE_SIZE) {
+        var n = socketRead(fd, buf + total, MAX_RESPONSE_SIZE - total)
+        if (n <= 0) { break }
+        total = total + n
+    }
+    socketClose(fd)
+
+    if (total == 0) {
+        dealloc(buf)
+        return fail
+    }
+
+    var raw = @string(buf, total)
+
+    // Parse status code from "HTTP/1.1 XXX ..."
+    var status = parseStatusCode(raw)
+
+    // Extract body after \r\n\r\n
+    var body_start = findBodyStart(raw)
+    var resp_body = ""
+    if (body_start > 0 and body_start < total) {
+        resp_body = substring(raw, body_start, total)
+    }
+
+    dealloc(buf)
+
+    return HttpResponse {
+        status: status,
+        body: resp_body,
+        ok: status >= 200 and status < 300,
+    }
+}
+
+/// Parse HTTP status code from response first line.
+fn parseStatusCode(raw: string) int {
+    // "HTTP/1.1 200 OK\r\n..."
+    // Status code starts at position 9
+    var rlen = @lenOf(raw)
+    if (rlen < 12) { return 0 }
+
+    var code: int = 0
+    var i: int = 9
+    while (i < rlen and i < 12) {
+        var c = charAt(raw, i)
+        if (c >= '0' and c <= '9') {
+            code = code * 10 + c - '0'
+        }
+        i += 1
+    }
+    return code
+}
+
+/// Find the start of the body (after \r\n\r\n).
+fn findBodyStart(raw: string) int {
+    var rlen = @lenOf(raw)
+    var i: int = 0
+    while (i < rlen - 3) {
+        if (charAt(raw, i) == '\r' and charAt(raw, i + 1) == '\n'
+            and charAt(raw, i + 2) == '\r' and charAt(raw, i + 3) == '\n') {
+            return i + 4
+        }
+        i += 1
+    }
+    return 0 - 1
+}

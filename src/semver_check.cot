@@ -1,0 +1,78 @@
+/// Semver validation — manual implementation.
+///
+/// Cannot use std/semver because its parse() function collides with
+/// std/json parse() in multi-file builds (flat symbol namespace).
+/// This is a known Cot compiler limitation.
+///
+/// Validates MAJOR.MINOR.PATCH format per SemVer 2.0.0.
+
+import "std/string"
+
+/// Check if a version string is valid semver (MAJOR.MINOR.PATCH).
+/// Accepts optional prerelease (-alpha.1) and build metadata (+build.123).
+fn isValidSemver(version: string) bool {
+    var vlen = @lenOf(version)
+    if (vlen == 0) { return false }
+
+    // Split on '.' — must have exactly 3 parts (before any - or + suffix)
+    var parts: List(string) = .{}
+
+    // Find the "core" part before any prerelease/build suffix
+    var core_end = indexOf(version, "-")
+    if (core_end < 0) {
+        core_end = indexOf(version, "+")
+    }
+    if (core_end < 0) {
+        core_end = vlen
+    }
+
+    var core = substring(version, 0, core_end)
+    splitInto(core, ".", &parts)
+
+    if (parts.count != 3) { return false }
+
+    // Each part must be non-empty and all digits
+    var i: int = 0
+    while (i < 3) {
+        var part = parts.get(i)
+        if (@lenOf(part) == 0) { return false }
+        if (not isAllDigits(part)) { return false }
+        i += 1
+    }
+
+    return true
+}
+
+/// Check if a string contains only ASCII digits.
+fn isAllDigits(s: string) bool {
+    var slen = @lenOf(s)
+    var i: int = 0
+    while (i < slen) {
+        var c = charAt(s, i)
+        if (c < '0' or c > '9') { return false }
+        i += 1
+    }
+    return true
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "valid semver versions" {
+    @assert(isValidSemver("1.0.0"))
+    @assert(isValidSemver("0.1.0"))
+    @assert(isValidSemver("10.20.30"))
+    @assert(isValidSemver("1.0.0-alpha"))
+    @assert(isValidSemver("1.0.0-alpha.1"))
+    @assert(isValidSemver("1.0.0+build.123"))
+    @assert(isValidSemver("1.0.0-beta+build"))
+}
+
+test "invalid semver versions" {
+    @assert(not isValidSemver(""))
+    @assert(not isValidSemver("1"))
+    @assert(not isValidSemver("1.0"))
+    @assert(not isValidSemver("abc"))
+    @assert(not isValidSemver("1.0.0.0"))
+}

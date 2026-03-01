@@ -1,0 +1,117 @@
+/// pkg — CLI tool for the cot.land package registry.
+///
+/// Commands:
+///   init      Create a new cot.json in the current directory
+///   publish   Publish the current package to the registry
+///   add       Add a dependency
+///   install   Install all dependencies from cot.json
+///   remove    Remove a dependency
+///   search    Search for packages
+///   info      Show package details
+///   list      List installed dependencies
+///   login     Store auth token
+///   help      Show usage
+///   version   Show version
+
+import "std/os"
+import "std/sys"
+import "std/string"
+import "http_client"
+import "commands"
+
+const VERSION: string = "0.1.0"
+const DEFAULT_REGISTRY: string = "http://localhost:8080"
+
+fn main() void {
+    if (argsCount() < 2) {
+        printUsage()
+        return
+    }
+
+    var cmd = arg(1)
+
+    if (cmd == "help" or cmd == "--help" or cmd == "-h") {
+        printUsage()
+        return
+    }
+    if (cmd == "version" or cmd == "--version") {
+        println("pkg ${VERSION}")
+        return
+    }
+    if (cmd == "init") {
+        cmdInit()
+        return
+    }
+    if (cmd == "search") {
+        if (argsCount() < 3) {
+            eprintln("Usage: pkg search <query>")
+            exit(1)
+        }
+        cmdSearch(arg(2))
+        return
+    }
+    if (cmd == "info") {
+        if (argsCount() < 3) {
+            eprintln("Usage: pkg info <name>")
+            exit(1)
+        }
+        cmdInfo(arg(2))
+        return
+    }
+    if (cmd == "publish") {
+        cmdPublish()
+        return
+    }
+    if (cmd == "add") {
+        if (argsCount() < 3) {
+            eprintln("Usage: pkg add <name>[@<version>]")
+            exit(1)
+        }
+        cmdAdd(arg(2))
+        return
+    }
+    if (cmd == "install") {
+        cmdInstall()
+        return
+    }
+    if (cmd == "remove") {
+        if (argsCount() < 3) {
+            eprintln("Usage: pkg remove <name>")
+            exit(1)
+        }
+        cmdRemove(arg(2))
+        return
+    }
+    if (cmd == "list") {
+        cmdList()
+        return
+    }
+    if (cmd == "login") {
+        cmdLogin()
+        return
+    }
+
+    eprintln("Unknown command: ${cmd}")
+    eprintln("Run 'pkg help' for usage.")
+    exit(1)
+}
+
+fn printUsage() void {
+    println("pkg — the cot.land package manager")
+    println("")
+    println("Usage: pkg <command> [args]")
+    println("")
+    println("Commands:")
+    println("  init                 Create cot.json in current directory")
+    println("  publish              Publish current package to registry")
+    println("  add <name>           Add latest version as dependency")
+    println("  add <name>@<ver>     Add specific version as dependency")
+    println("  install              Install all dependencies from cot.json")
+    println("  remove <name>        Remove a dependency")
+    println("  search <query>       Search for packages")
+    println("  info <name>          Show package details")
+    println("  list                 List installed dependencies")
+    println("  login                Store auth token")
+    println("  version              Show version")
+    println("  help                 Show this help")
+}

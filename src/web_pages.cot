@@ -6,9 +6,11 @@
 import "std/string"
 import "std/list"
 import "std/json"
+import "std/fs"
 import "web_templates"
 import "package"
 import "search_index"
+import "files"
 
 /// Render the landing page.
 /// Ported from JSR frontend/routes/index.tsx.
@@ -126,6 +128,104 @@ fn packageDetailPage(pkg: Package) string {
     sb.append("</div>\n")
 
     return layout(pkg.name, sb.toString())
+}
+
+/// Render a version detail page — files, dependencies, metadata.
+/// Ported from JSR frontend/routes/package_version.tsx.
+fn versionDetailPage(pkg: Package, ver: Version) string {
+    var sb: StringBuilder = .{}
+    sb.append("<div class=\"package-header\">\n")
+    sb.append("<h2><a href=\"/packages/")
+    sb.append(escapeHtml(pkg.name))
+    sb.append("\">")
+    sb.append(escapeHtml(pkg.name))
+    sb.append("</a> @ ")
+    sb.append(escapeHtml(ver.number))
+    sb.append("</h2>\n")
+    sb.append("<p class=\"description\">")
+    sb.append(escapeHtml(pkg.description))
+    sb.append("</p>\n")
+    sb.append("</div>\n")
+
+    // Metadata
+    sb.append("<div class=\"version-meta\">\n")
+    sb.append("<h3>Metadata</h3>\n")
+    sb.append("<table>\n")
+    sb.append("<tr><td>Published</td><td>")
+    sb.append(escapeHtml(ver.published))
+    sb.append("</td></tr>\n")
+    if (@lenOf(ver.checksum) > 0) {
+        sb.append("<tr><td>Checksum</td><td><code>")
+        sb.append(escapeHtml(ver.checksum))
+        sb.append("</code></td></tr>\n")
+    }
+    sb.append("</table>\n")
+    sb.append("</div>\n")
+
+    // Dependencies
+    if (ver.dependencies.count > 0) {
+        sb.append("<div class=\"dependencies\">\n")
+        sb.append("<h3>Dependencies</h3>\n")
+        sb.append("<ul>\n")
+        var i: int = 0
+        while (i < ver.dependencies.count) {
+            var dep = ver.dependencies.get(i)
+            sb.append("<li><a href=\"/packages/")
+            sb.append(escapeHtml(dep.name))
+            sb.append("\">")
+            sb.append(escapeHtml(dep.name))
+            sb.append("</a> ")
+            sb.append(escapeHtml(dep.version_req))
+            sb.append("</li>\n")
+            i += 1
+        }
+        sb.append("</ul>\n")
+        sb.append("</div>\n")
+    }
+
+    // Files
+    sb.append("<div class=\"files\">\n")
+    sb.append("<h3>Files</h3>\n")
+    var dir = versionPath(pkg.name, ver.number)
+    var entries: List(string) = .{}
+    listDir(dir, &entries) catch {}
+    if (entries.count == 0) {
+        sb.append("<p>No files stored.</p>\n")
+    } else {
+        sb.append("<ul class=\"file-list\">\n")
+        var j: int = 0
+        while (j < entries.count) {
+            var fname = entries.get(j)
+            sb.append("<li><a href=\"/api/packages/")
+            sb.append(escapeHtml(pkg.name))
+            sb.append("/")
+            sb.append(escapeHtml(ver.number))
+            sb.append("/files/")
+            sb.append(escapeHtml(fname))
+            sb.append("\">")
+            sb.append(escapeHtml(fname))
+            sb.append("</a></li>\n")
+            j += 1
+        }
+        sb.append("</ul>\n")
+    }
+    sb.append("</div>\n")
+
+    // Install
+    sb.append("<div class=\"install\">\n")
+    sb.append("<h3>Install</h3>\n")
+    sb.append("<code>pkg add ")
+    sb.append(escapeHtml(pkg.name))
+    sb.append("@")
+    sb.append(escapeHtml(ver.number))
+    sb.append("</code>\n")
+    sb.append("</div>\n")
+
+    var title_sb: StringBuilder = .{}
+    title_sb.append(pkg.name)
+    title_sb.append(" @ ")
+    title_sb.append(ver.number)
+    return layout(title_sb.toString(), sb.toString())
 }
 
 /// Render search results page.
