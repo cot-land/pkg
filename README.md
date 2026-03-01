@@ -18,7 +18,7 @@ Working:
 - SHA-256 checksums on published content
 - Bearer token auth on publish/create endpoints
 - CLI tool: init, publish, add, install, remove, search, info, list, login
-- 52 inline tests passing
+- 42 inline tests passing
 
 ## Quick Start
 
@@ -123,10 +123,11 @@ cli/
 
 ```bash
 cot test src/router.cot        # 15 tests
-cot test src/request.cot       # 6 tests
-cot test src/response.cot      # 9 tests
-cot test src/registry.cot      # 5 tests
-cot test src/search_index.cot  # 7 tests
+cot test src/request.cot       # 7 tests
+cot test src/response.cot      # 5 tests
+cot test src/registry.cot      # 8 tests
+cot test src/search_index.cot  # 10 tests
+cot test src/semver_check.cot  # 2 tests
 cot check src/main.cot         # full type-check
 ```
 

@@ -142,14 +142,15 @@ HTTP Request → server.cot (accept + read)
 
 ```bash
 cot test src/router.cot            # Router pattern matching (15 tests)
-cot test src/request.cot           # Query string parsing (6 tests)
-cot test src/response.cot          # Response building (9 tests)
-cot test src/registry.cot          # Registry persistence (5 tests)
-cot test src/search_index.cot      # Search matching (7 tests)
+cot test src/request.cot           # Query string parsing (7 tests)
+cot test src/response.cot          # Response building (5 tests)
+cot test src/registry.cot          # Registry persistence (8 tests)
+cot test src/search_index.cot      # Search matching (10 tests)
+cot test src/semver_check.cot      # Semver validation (2 tests)
 cot check src/main.cot             # Full type-check (all files)
 ```
 
-Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them. 52 tests pass total.
+Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them. 42 unique tests across all modules. Note: `cot test` runs tests from imported modules transitively, so counts above include transitive tests.
 
 ## Documents
 

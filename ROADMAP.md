@@ -26,7 +26,7 @@ Phases 1-6 from the original plan are complete. The registry server runs, handle
 | Source file listing + serving API | Done | `api_versions.cot` |
 | Version detail web page | Done | `web_pages.cot` |
 | Content-Length body reading | Done | `server.cot` |
-| 52 inline tests | Done | across all modules |
+| 42 inline tests | Done | across all modules |
 
 ## What's Next
 
