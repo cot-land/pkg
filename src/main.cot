@@ -27,9 +27,8 @@ import "web_pages"
 import "web_static"
 import "files"
 
-// NOTE: Module-level var/const strings are broken at runtime (empty value).
-// Module-level int vars have garbage upper bits. Using local variables instead.
-// See ~/cotlang/cot/claude/PKG_COMPILER_BUGS.md
+const VERSION: string = "0.1.0"
+const DEFAULT_PORT: int = 8080
 
 /// Route handler IDs — used for dispatch in the main loop.
 /// Each route registered with the router gets a unique ID.
@@ -54,7 +53,7 @@ fn main() void {
             return
         }
         if (cmd == "version" or cmd == "--version") {
-            info("cot.land registry v0.1.0")
+            info("cot.land registry v${VERSION}")
             return
         }
     }
@@ -67,10 +66,10 @@ fn main() void {
 
     // Initialize registry
     var reg = Registry.init("data/registry.json")
-    info("cot.land registry v0.1.0")
+    info("cot.land registry v${VERSION}")
 
     // Create server
-    var srv = Server.init(8080)
+    var srv = Server.init(DEFAULT_PORT)
 
     // Register routes
     // Ported from Go http.HandleFunc / http.ServeMux pattern
@@ -91,7 +90,7 @@ fn main() void {
 
     // Start listening
     srv.listen() catch {
-        logError("failed to start server")
+        logError("failed to start server on port ${intToString(DEFAULT_PORT)}")
         exit(1)
     }
 

@@ -14,8 +14,9 @@ import "request"
 import "response"
 import "router"
 
-// NOTE: Module-level const ints have garbage upper bits at runtime (compiler bug).
-// Using inline literals instead. See ~/cotlang/cot/claude/PKG_COMPILER_BUGS.md
+/// Maximum request size (64 KB).
+/// Go net/http defaults to 1MB for headers, we start smaller.
+const MAX_REQUEST_SIZE: int = MAX_REQUEST_SIZE
 
 /// A parsed incoming request with its route match, ready for dispatch.
 struct ServerRequest {
@@ -48,7 +49,7 @@ struct Server {
     /// Ported from Go net/http.Server.ListenAndServe.
     fn listen() NetError!void {
         self.listen_fd = try tcpListen(self.port)
-        info("cot.land registry listening on :8080")
+        info("cot.land registry listening on :${intToString(self.port)}")
     }
 
     /// Accept and handle connections in a loop.
@@ -65,8 +66,8 @@ struct Server {
 
         // Read request data
         // Go: conn.serve → readRequest → http.ReadRequest
-        var buf = alloc(0, 65536)
-        var n = socketRead(client_fd, buf, 65536)
+        var buf = alloc(0, MAX_REQUEST_SIZE)
+        var n = socketRead(client_fd, buf, MAX_REQUEST_SIZE)
 
         if (n <= 0) {
             dealloc(buf)
