@@ -16,7 +16,7 @@ import "router"
 
 /// Maximum request size (64 KB).
 /// Go net/http defaults to 1MB for headers, we start smaller.
-const MAX_REQUEST_SIZE: int = MAX_REQUEST_SIZE
+const MAX_REQUEST_SIZE: int = 65536
 
 /// A parsed incoming request with its route match, ready for dispatch.
 struct ServerRequest {
