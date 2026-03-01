@@ -11,6 +11,7 @@ import "std/os"
 import "std/sys"
 import "std/string"
 import "std/log"
+import "std/fs"
 import "server"
 import "router"
 import "request"
@@ -24,9 +25,11 @@ import "api_search"
 import "api_auth"
 import "web_pages"
 import "web_static"
+import "files"
 
-const VERSION: string = "0.1.0"
-const DEFAULT_PORT: int = 8080
+// NOTE: Module-level var/const strings are broken at runtime (empty value).
+// Module-level int vars have garbage upper bits. Using local variables instead.
+// See ~/cotlang/cot/claude/PKG_COMPILER_BUGS.md
 
 /// Route handler IDs — used for dispatch in the main loop.
 /// Each route registered with the router gets a unique ID.
@@ -40,6 +43,7 @@ var ROUTE_API_PACKAGE: int = 0
 var ROUTE_API_PACKAGE_VERSION: int = 0
 var ROUTE_API_SEARCH: int = 0
 var ROUTE_API_PUBLISH: int = 0
+var ROUTE_API_CREATE_PACKAGE: int = 0
 
 fn main() void {
     // Handle CLI arguments
@@ -50,17 +54,23 @@ fn main() void {
             return
         }
         if (cmd == "version" or cmd == "--version") {
-            info("cot.land registry v${VERSION}")
+            info("cot.land registry v0.1.0")
             return
         }
     }
 
+    // Ensure data directories exist
+    makeDirAll("data/packages") catch {
+        logError("failed to create data directories")
+        exit(1)
+    }
+
     // Initialize registry
     var reg = Registry.init("data/registry.json")
-    info("cot.land registry v${VERSION}")
+    info("cot.land registry v0.1.0")
 
     // Create server
-    var srv = Server.init(DEFAULT_PORT)
+    var srv = Server.init(8080)
 
     // Register routes
     // Ported from Go http.HandleFunc / http.ServeMux pattern
@@ -77,10 +87,11 @@ fn main() void {
     ROUTE_API_PACKAGE_VERSION = r.handle("GET /api/packages/:name/:version")
     ROUTE_API_SEARCH = r.handle("GET /api/search")
     ROUTE_API_PUBLISH = r.handle("POST /api/packages/:name/:version")
+    ROUTE_API_CREATE_PACKAGE = r.handle("POST /api/packages")
 
     // Start listening
     srv.listen() catch {
-        logError("failed to start server on port ${intToString(DEFAULT_PORT)}")
+        logError("failed to start server")
         exit(1)
     }
 
@@ -178,9 +189,22 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
         return handleSearch(reg, q)
     }
     if (id == ROUTE_API_PUBLISH) {
+        // Auth required — ported from JSR publish auth check
+        var token = extractBearerToken(req)
+        if (@lenOf(token) == 0) {
+            return unauthorized()
+        }
         var name = paramGet(route, "name")
         var version = paramGet(route, "version")
         return handlePublishVersion(reg, name, version, req)
+    }
+    if (id == ROUTE_API_CREATE_PACKAGE) {
+        // Auth required
+        var token = extractBearerToken(req)
+        if (@lenOf(token) == 0) {
+            return unauthorized()
+        }
+        return handleCreatePackage(reg, req)
     }
 
     return notFound()

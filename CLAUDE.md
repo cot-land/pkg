@@ -141,8 +141,8 @@ Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute
 
 | Document | Purpose |
 |----------|---------|
-| `claude/MISSING_FEATURES.md` | Missing stdlib/compiler features needed for this project |
 | `claude/API_DESIGN.md` | REST API design, endpoints, request/response formats |
+| `~/cotlang/cot/claude/PKG_COMPILER_BUGS.md` | Compiler bugs found during pkg development |
 
 ## Behavioral Guidelines
 

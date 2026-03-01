@@ -6,11 +6,13 @@ import "std/string"
 import "std/list"
 import "std/json"
 import "std/time"
+import "std/log"
 import "response"
 import "request"
 import "router"
 import "registry"
 import "package"
+import "files"
 
 /// GET /api/packages/:name/:version — get specific version metadata.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package/versions/:version.
@@ -97,6 +99,13 @@ fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Requ
     }
 
     if (reg.addVersion(name, ver)) {
+        // Store the request body as the package content
+        if (@lenOf(req.body) > 0) {
+            storePackageFile(name, version, "package.cot", req.body) catch {
+                logError("failed to store package file")
+            }
+        }
+
         var result = jsonObject()
         jsonObjectPut(result, "package", jsonString(name))
         jsonObjectPut(result, "version", jsonString(version))

@@ -2,29 +2,25 @@
 ///
 /// Ported from JSR api/src/gcs.rs (file storage, simplified to local disk).
 /// Stores published packages at data/packages/{name}/{version}/
-///
-/// NOTE: This module requires mkdir and listDir which are not yet in stdlib.
-/// See claude/MISSING_FEATURES.md. For now, only the interfaces are defined.
-/// File reading/writing works via existing std/fs.
 
 import "std/string"
 import "std/fs"
 import "std/path"
 import "std/log"
 
-/// Base directory for stored package files.
-const PACKAGES_DIR: string = "data/packages"
+// NOTE: Module-level const strings are empty at runtime (compiler bug).
+// Using inline strings instead. See ~/cotlang/cot/claude/PKG_COMPILER_BUGS.md
 
 /// Build the storage path for a package version.
 /// Returns: "data/packages/{name}/{version}"
 fn versionPath(name: string, version: string) string {
-    return join3(PACKAGES_DIR, name, version)
+    return join3("data/packages", name, version)
 }
 
 /// Build the path for a specific file in a package version.
 /// Returns: "data/packages/{name}/{version}/{file_path}"
 fn filePath(name: string, version: string, file: string) string {
-    return join4(PACKAGES_DIR, name, version, file)
+    return join4("data/packages", name, version, file)
 }
 
 /// Read a stored package file.
@@ -34,10 +30,10 @@ fn readPackageFile(name: string, version: string, file: string) FsError!string {
 }
 
 /// Store a package file on disk.
-/// NOTE: Requires mkdir to create parent directories — blocked until
-/// mkdir is added to stdlib. See claude/MISSING_FEATURES.md.
+/// Creates parent directories if they don't exist.
 fn storePackageFile(name: string, version: string, file: string, content: string) FsError!void {
-    // TODO: mkdir data/packages/{name}/{version}/ — blocked on missing mkdir
+    var dir = versionPath(name, version)
+    try makeDirAll(dir)
     var p = filePath(name, version, file)
     try writeFile(p, content)
 }
