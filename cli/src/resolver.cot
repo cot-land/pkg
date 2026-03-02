@@ -85,14 +85,14 @@ fn resolve(host: string, port: int, direct_deps: List(Requirement)) List(Resolve
 
         // Find latest version satisfying ALL constraints
         var best = findBestMatchAll(versions, all_ranges)
-        if (@lenOf(best) == 0) {
+        if (best.len == 0) {
             eprint("Error: version conflict for '${name}' — no version satisfies all constraints\n")
             exit(1)
         }
 
         // Check if already resolved to the same version
         var existing = getResolved(resolved_names, resolved_versions, name)
-        if (@lenOf(existing) > 0) {
+        if (existing.len > 0) {
             if (existing == best) {
                 // Already resolved to the same version, skip
                 continue
@@ -173,7 +173,7 @@ fn fetchVersionList(host: string, port: int, name: string) List(string) {
         while (i < count) {
             var v = jsonArrayGet(versions, i)
             var ver = jsonObjectGetString(v, "version")
-            if (@lenOf(ver) > 0) {
+            if (ver.len > 0) {
                 result.append(ver)
             }
             i += 1
@@ -208,7 +208,7 @@ fn fetchDepList(host: string, port: int, name: string, version: string) List(Req
             var dep = jsonArrayGet(deps, i)
             var dep_name = jsonObjectGetString(dep, "name")
             var dep_ver = jsonObjectGetString(dep, "version")
-            if (@lenOf(dep_name) > 0 and @lenOf(dep_ver) > 0) {
+            if (dep_name.len > 0 and dep_ver.len > 0) {
                 result.append(Requirement { name: dep_name, range: dep_ver })
             }
             i += 1

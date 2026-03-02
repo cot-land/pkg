@@ -49,7 +49,7 @@ struct Server {
     /// Ported from Go net/http.Server.ListenAndServe.
     fn listen() NetError!void {
         self.listen_fd = try tcpListen(self.port)
-        info("cot.land registry listening on :${intToString(self.port)}")
+        info("cot.land registry listening on :${self.port}")
     }
 
     /// Accept and handle connections in a loop.
@@ -148,7 +148,7 @@ fn findHeaderEnd(buf: i64, len: int) int {
 fn extractContentLength(buf: i64, hdr_end: int) int {
     // Search for "Content-Length: " (case-sensitive, matching curl/browsers)
     var needle = "Content-Length: "
-    var nlen = @lenOf(needle)
+    var nlen = needle.len
     var i: int = 0
     while (i < hdr_end - nlen) {
         // Check if we're at start of line (pos 0 or after \n)
@@ -162,7 +162,7 @@ fn extractContentLength(buf: i64, hdr_end: int) int {
             var match = true
             var j: int = 0
             while (j < nlen and match) {
-                if (@intToPtr(*u8, buf + i + j).* != charAt(needle, j)) {
+                if (@intToPtr(*u8, buf + i + j).* != needle[j]) {
                     match = false
                 }
                 j += 1

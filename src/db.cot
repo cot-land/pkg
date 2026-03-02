@@ -218,9 +218,9 @@ struct Db {
     /// Search packages using LIKE matching on name and description.
     fn search(query: string) List(SearchResult) {
         var results: List(SearchResult) = .{}
-        if (@lenOf(query) == 0) { return results }
+        if (query.len == 0) { return results }
 
-        var pattern = "%" + query + "%"
+        var pattern = "%" ++ query ++ "%"
         var stmt = sqlitePrepare(self.handle, "SELECT name, description FROM packages WHERE name LIKE ?1 OR description LIKE ?1 ORDER BY name LIMIT 50")
         if (stmt == 0) { return results }
         bindText(stmt, 1, pattern)

@@ -50,12 +50,12 @@ var ROUTE_VERSION_DETAIL_PAGE: int = 0
 /// Look up an environment variable by name. Returns "" if not found.
 fn getEnvVar(name: string) string {
     var count = environCount()
-    var prefix = name + "="
+    var prefix = name ++ "="
     var i: int = 0
     while (i < count) {
         var entry = env(i)
         if (startsWith(entry, prefix)) {
-            return substring(entry, @lenOf(prefix), @lenOf(entry))
+            return substring(entry, prefix.len, entry.len)
         }
         i += 1
     }
@@ -89,7 +89,7 @@ fn main() void {
     // Determine port — Fly.io sets PORT env var
     var port = DEFAULT_PORT
     var port_str = getEnvVar("PORT")
-    if (@lenOf(port_str) > 0) {
+    if (port_str.len > 0) {
         port = parseInt(port_str)
     }
 
@@ -121,7 +121,7 @@ fn main() void {
 
         // Start listening
         srv.listen() catch {
-            logError("failed to start server on port ${intToString(port)}")
+            logError("failed to start server on port ${port}")
             exit(1)
         }
 
@@ -219,9 +219,9 @@ fn dispatch(db: *Db, sreq: ServerRequest) string {
         var version = paramGet(route, "version")
         // Extract file path from URL: /api/packages/:name/:version/files/...
         var prefix = "/api/packages/${name}/${version}/files"
-        if (@lenOf(req.path) > @lenOf(prefix) + 1) {
+        if (req.path.len > prefix.len + 1) {
             // Has a file path after /files/
-            var fp = substring(req.path, @lenOf(prefix) + 1, @lenOf(req.path))
+            var fp = substring(req.path, prefix.len + 1, req.path.len)
             if (contains(fp, "..")) {
                 return badRequest("invalid file path")
             }
@@ -265,12 +265,12 @@ fn dispatch(db: *Db, sreq: ServerRequest) string {
 /// Handle the "token create <owner>" CLI subcommand.
 fn handleTokenCommand() void {
     if (argsCount() < 4) {
-        fd_write(1, @ptrOf("Usage: pkg token create <owner>\n"), 31)
+        println("Usage: pkg token create <owner>")
         exit(1)
     }
     var subcmd = arg(2)
     if (subcmd != "create") {
-        fd_write(1, @ptrOf("Usage: pkg token create <owner>\n"), 31)
+        println("Usage: pkg token create <owner>")
         exit(1)
     }
     var owner = arg(3)
@@ -282,7 +282,7 @@ fn handleTokenCommand() void {
     }
 
     // Generate raw token: sha256 of random data
-    var raw_token = sha256(intToString(randomInt()) + intToString(randomInt()))
+    var raw_token = sha256(intToString(randomInt()) ++ intToString(randomInt()))
 
     // Hash the raw token for storage
     var token_hash = sha256(raw_token)
@@ -290,8 +290,7 @@ fn handleTokenCommand() void {
     if (Db.open("data/registry.db")) |db| {
         if (db.createToken(token_hash, owner, "cli-generated", "2026-03-02")) {
             // Print raw token to stdout for the user to copy
-            fd_write(1, @ptrOf(raw_token), @lenOf(raw_token))
-            fd_write(1, @ptrOf("\n"), 1)
+            println(raw_token)
         } else {
             logError("failed to create token")
             exit(1)
@@ -304,11 +303,11 @@ fn handleTokenCommand() void {
 }
 
 fn printUsage() void {
-    fd_write(1, @ptrOf("cot.land — the Cot package registry\n\n"), 38)
-    fd_write(1, @ptrOf("Usage: pkg [command]\n\n"), 21)
-    fd_write(1, @ptrOf("Commands:\n"), 10)
-    fd_write(1, @ptrOf("  (none)           Start the registry server\n"), 45)
-    fd_write(1, @ptrOf("  token create <o> Generate auth token for owner\n"), 49)
-    fd_write(1, @ptrOf("  version          Print version\n"), 32)
-    fd_write(1, @ptrOf("  help             Print this help\n"), 34)
+    print("cot.land — the Cot package registry\n\n")
+    print("Usage: pkg [command]\n\n")
+    println("Commands:")
+    println("  (none)           Start the registry server")
+    println("  token create <o> Generate auth token for owner")
+    println("  version          Print version")
+    println("  help             Print this help")
 }

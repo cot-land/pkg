@@ -51,22 +51,22 @@ fn httpRequest(method: string, host: string, port: int, path: string, body: stri
     sb.append("\r\n")
     sb.append("Connection: close\r\n")
 
-    if (@lenOf(token) > 0) {
+    if (token.len > 0) {
         sb.append("Authorization: Bearer ")
         sb.append(token)
         sb.append("\r\n")
     }
 
-    if (@lenOf(body) > 0) {
+    if (body.len > 0) {
         sb.append("Content-Type: application/json\r\n")
         sb.append("Content-Length: ")
-        sb.appendInt(@lenOf(body))
+        sb.appendInt(body.len)
         sb.append("\r\n")
     }
 
     sb.append("\r\n")
 
-    if (@lenOf(body) > 0) {
+    if (body.len > 0) {
         sb.append(body)
     }
 
@@ -113,13 +113,13 @@ fn httpRequest(method: string, host: string, port: int, path: string, body: stri
 fn parseStatusCode(raw: string) int {
     // "HTTP/1.1 200 OK\r\n..."
     // Status code starts at position 9
-    var rlen = @lenOf(raw)
+    var rlen = raw.len
     if (rlen < 12) { return 0 }
 
     var code: int = 0
     var i: int = 9
     while (i < rlen and i < 12) {
-        var c = charAt(raw, i)
+        var c = raw[i]
         if (c >= '0' and c <= '9') {
             code = code * 10 + c - '0'
         }
@@ -130,11 +130,11 @@ fn parseStatusCode(raw: string) int {
 
 /// Find the start of the body (after \r\n\r\n).
 fn findBodyStart(raw: string) int {
-    var rlen = @lenOf(raw)
+    var rlen = raw.len
     var i: int = 0
     while (i < rlen - 3) {
-        if (charAt(raw, i) == '\r' and charAt(raw, i + 1) == '\n'
-            and charAt(raw, i + 2) == '\r' and charAt(raw, i + 3) == '\n') {
+        if (raw[i] == '\r' and raw[i + 1] == '\n'
+            and raw[i + 2] == '\r' and raw[i + 3] == '\n') {
             return i + 4
         }
         i += 1

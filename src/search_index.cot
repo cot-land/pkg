@@ -20,7 +20,7 @@ struct SearchResult {
 fn searchPackages(packages: List(Package), query: string) List(SearchResult) {
     var results: List(SearchResult) = .{}
     var q = toLower(query)
-    var qlen = @lenOf(q)
+    var qlen = q.len
     if (qlen == 0) { return results }
 
     var i: int = 0

@@ -11,7 +11,7 @@ import "std/string"
 /// Check if a version string is valid semver (MAJOR.MINOR.PATCH).
 /// Accepts optional prerelease (-alpha.1) and build metadata (+build.123).
 fn isValidSemver(version: string) bool {
-    var vlen = @lenOf(version)
+    var vlen = version.len
     if (vlen == 0) { return false }
 
     // Split on '.' — must have exactly 3 parts (before any - or + suffix)
@@ -35,7 +35,7 @@ fn isValidSemver(version: string) bool {
     var i: int = 0
     while (i < 3) {
         var part = parts.get(i)
-        if (@lenOf(part) == 0) { return false }
+        if (part.len == 0) { return false }
         if (not isAllDigits(part)) { return false }
         i += 1
     }
@@ -45,10 +45,10 @@ fn isValidSemver(version: string) bool {
 
 /// Check if a string contains only ASCII digits.
 fn isAllDigits(s: string) bool {
-    var slen = @lenOf(s)
+    var slen = s.len
     var i: int = 0
     while (i < slen) {
-        var c = charAt(s, i)
+        var c = s[i]
         if (c < '0' or c > '9') { return false }
         i += 1
     }

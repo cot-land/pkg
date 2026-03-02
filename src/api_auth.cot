@@ -12,11 +12,11 @@ import "db"
 /// Ported from Go net/http — parse "Bearer <token>" format.
 fn extractBearerToken(req: Request) string {
     var auth = req.header("Authorization")
-    if (@lenOf(auth) == 0) { return "" }
+    if (auth.len == 0) { return "" }
 
     // Expect "Bearer <token>"
     if (startsWith(auth, "Bearer ")) {
-        return substring(auth, 7, @lenOf(auth))
+        return substring(auth, 7, auth.len)
     }
     return ""
 }
@@ -25,7 +25,7 @@ fn extractBearerToken(req: Request) string {
 /// Returns the owner name if valid, null if invalid or missing.
 fn validateRequest(database: *Db, req: Request) ?string {
     var token = extractBearerToken(req)
-    if (@lenOf(token) == 0) { return null }
+    if (token.len == 0) { return null }
     var hash = sha256(token)
     return database.validateToken(hash)
 }

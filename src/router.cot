@@ -66,7 +66,7 @@ struct Router {
         var space_idx = indexOf(pattern, " ")
         if (space_idx >= 0) {
             method = substring(pattern, 0, space_idx)
-            path = substring(pattern, space_idx + 1, @lenOf(pattern))
+            path = substring(pattern, space_idx + 1, pattern.len)
         }
 
         // Split path into segments
@@ -117,7 +117,7 @@ struct Router {
 
             // Check method filter
             // Go: pattern.method check in ServeMux.Handler
-            if (@lenOf(route.method) > 0 and route.method != method) {
+            if (route.method.len > 0 and route.method != method) {
                 i += 1
                 continue
             }
@@ -158,13 +158,13 @@ fn routeSpecificity(route: Route) int {
     var i: int = 0
     while (i < route.segments.count) {
         var seg = route.segments.get(i)
-        if (@lenOf(seg) > 0 and not startsWith(seg, ":") and seg != "*") {
+        if (seg.len > 0 and not startsWith(seg, ":") and seg != "*") {
             score += 1
         }
         i += 1
     }
     // Method-specific routes are more specific
-    if (@lenOf(route.method) > 0) {
+    if (route.method.len > 0) {
         score += 100
     }
     return score
@@ -191,7 +191,7 @@ fn matchSegments(route: Route, req_segments: List(string), match_params: *List(P
 
             if (startsWith(route_seg, ":")) {
                 var param = Param {
-                    key: substring(route_seg, 1, @lenOf(route_seg)),
+                    key: substring(route_seg, 1, route_seg.len),
                     value: req_seg,
                 }
                 match_params.append(param)
@@ -214,7 +214,7 @@ fn matchSegments(route: Route, req_segments: List(string), match_params: *List(P
         if (startsWith(route_seg, ":")) {
             // Parameter segment — capture value
             var param = Param {
-                key: substring(route_seg, 1, @lenOf(route_seg)),
+                key: substring(route_seg, 1, route_seg.len),
                 value: req_seg,
             }
             match_params.append(param)

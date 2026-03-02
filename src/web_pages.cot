@@ -154,7 +154,7 @@ fn versionDetailPage(pkg: Package, ver: Version) string {
     sb.append("<tr><td>Published</td><td>")
     sb.append(escapeHtml(ver.published))
     sb.append("</td></tr>\n")
-    if (@lenOf(ver.checksum) > 0) {
+    if (ver.checksum.len > 0) {
         sb.append("<tr><td>Checksum</td><td><code>")
         sb.append(escapeHtml(ver.checksum))
         sb.append("</code></td></tr>\n")

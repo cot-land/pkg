@@ -112,17 +112,17 @@ struct Package {
 /// Rules: lowercase alphanumeric + hyphens, 1-64 chars, no leading/trailing hyphens.
 /// Ported from JSR validate_package_name.
 fn isValidPackageName(name: string) bool {
-    var nlen = @lenOf(name)
+    var nlen = name.len
     if (nlen == 0 or nlen > 64) { return false }
 
     // No leading or trailing hyphens
-    if (charAt(name, 0) == '-') { return false }
-    if (charAt(name, nlen - 1) == '-') { return false }
+    if (name[0] == '-') { return false }
+    if (name[nlen - 1] == '-') { return false }
 
     // Only lowercase letters, digits, and hyphens
     var i: int = 0
     while (i < nlen) {
-        var c = charAt(name, i)
+        var c = name[i]
         var valid = (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '-'
         if (not valid) { return false }
         i += 1

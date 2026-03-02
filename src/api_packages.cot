@@ -50,7 +50,7 @@ fn handleGetPackage(db: *Db, name: string) string {
 /// Ported from JSR POST /api/scopes/:scope/packages.
 fn handleCreatePackage(db: *Db, req: Request) string {
     var body = req.body
-    if (@lenOf(body) == 0) {
+    if (body.len == 0) {
         return badRequest("empty body")
     }
 
@@ -64,7 +64,7 @@ fn handleCreatePackage(db: *Db, req: Request) string {
     var author = jsonObjectGetString(root, "author")
     jsonFree(root)
 
-    if (@lenOf(name) == 0) {
+    if (name.len == 0) {
         return badRequest("missing name")
     }
 

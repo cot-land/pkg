@@ -48,7 +48,7 @@ fn cmdSearch(query: string) void {
     var resp = httpGet(REGISTRY_HOST, REGISTRY_PORT, path_sb.toString())
 
     if (not resp.ok) {
-        eprintln("Search failed (status ${intToString(resp.status)})")
+        eprintln("Search failed (status ${resp.status})")
         exit(1)
     }
 
@@ -73,7 +73,7 @@ fn cmdSearch(query: string) void {
             var sb: StringBuilder = .{}
             sb.append("  ")
             sb.append(name)
-            if (@lenOf(desc) > 0) {
+            if (desc.len > 0) {
                 sb.append(" — ")
                 sb.append(desc)
             }
@@ -100,7 +100,7 @@ fn cmdInfo(name: string) void {
         exit(1)
     }
     if (not resp.ok) {
-        eprintln("Failed to fetch package (status ${intToString(resp.status)})")
+        eprintln("Failed to fetch package (status ${resp.status})")
         exit(1)
     }
 
@@ -115,10 +115,10 @@ fn cmdInfo(name: string) void {
     var author = jsonObjectGetString(root, "author")
 
     println(pkg_name)
-    if (@lenOf(desc) > 0) {
+    if (desc.len > 0) {
         println("  ${desc}")
     }
-    if (@lenOf(author) > 0) {
+    if (author.len > 0) {
         println("  by ${author}")
     }
 
@@ -163,14 +163,14 @@ fn cmdPublish() void {
     var version = jsonObjectGetString(root, "version")
     jsonFree(root)
 
-    if (@lenOf(name) == 0 or @lenOf(version) == 0) {
+    if (name.len == 0 or version.len == 0) {
         eprintln("cot.json must have 'name' and 'version' fields")
         exit(1)
     }
 
     // Read auth token
     var token = readToken()
-    if (@lenOf(token) == 0) {
+    if (token.len == 0) {
         eprintln("Not logged in. Run 'pkg login' first.")
         exit(1)
     }
@@ -185,7 +185,7 @@ fn cmdPublish() void {
     var create_resp = httpPost(REGISTRY_HOST, REGISTRY_PORT, "/api/packages", create_body_sb.toString(), token)
     // 409 = already exists, that's fine
     if (not create_resp.ok and create_resp.status != 409) {
-        eprintln("Failed to create package (status ${intToString(create_resp.status)})")
+        eprintln("Failed to create package (status ${create_resp.status})")
         exit(1)
     }
 
@@ -219,7 +219,7 @@ fn cmdAdd(spec: string) void {
     var at_idx = indexOf(spec, "@")
     if (at_idx > 0) {
         name = substring(spec, 0, at_idx)
-        version = substring(spec, at_idx + 1, @lenOf(spec))
+        version = substring(spec, at_idx + 1, spec.len)
     }
 
     // Fetch package info to find the latest version if not specified
@@ -233,7 +233,7 @@ fn cmdAdd(spec: string) void {
         exit(1)
     }
     if (not resp.ok) {
-        eprintln("Failed to fetch package (status ${intToString(resp.status)})")
+        eprintln("Failed to fetch package (status ${resp.status})")
         exit(1)
     }
 
@@ -244,7 +244,7 @@ fn cmdAdd(spec: string) void {
     }
 
     // Find version to install
-    if (@lenOf(version) == 0) {
+    if (version.len == 0) {
         // Use latest version
         var versions = jsonObjectGet(root, "versions")
         if (versions != 0 and jsonTag(versions) == JSON_ARRAY) {
@@ -257,7 +257,7 @@ fn cmdAdd(spec: string) void {
     }
     jsonFree(root)
 
-    if (@lenOf(version) == 0) {
+    if (version.len == 0) {
         eprintln("No versions published for '${name}'")
         exit(1)
     }
@@ -288,7 +288,7 @@ fn cmdAdd(spec: string) void {
     // Write lock file
     writeLockFile(resolved)
 
-    println("Added ${name}@${version} (${intToString(resolved.count)} packages resolved)")
+    println("Added ${name}@${version} (${resolved.count} packages resolved)")
 }
 
 // ============================================================================
@@ -316,7 +316,7 @@ fn cmdInstall() void {
             downloadPackage(dep.name, dep.version)
             i += 1
         }
-        println("Done (${intToString(locked.count)} packages).")
+        println("Done (${locked.count} packages).")
         return
     }
 
@@ -333,7 +333,7 @@ fn cmdInstall() void {
     }
 
     writeLockFile(resolved)
-    println("Done (${intToString(resolved.count)} packages).")
+    println("Done (${resolved.count} packages).")
 }
 
 // ============================================================================
@@ -365,7 +365,7 @@ fn cmdRemove(name: string) void {
 
     // Check if dependency exists
     var existing = jsonObjectGetString(deps, name)
-    if (@lenOf(existing) == 0) {
+    if (existing.len == 0) {
         eprintln("'${name}' is not a dependency")
         jsonFree(root)
         exit(1)
@@ -392,7 +392,7 @@ fn cmdRemove(name: string) void {
     var new_root = jsonObject()
     jsonObjectPut(new_root, "name", jsonString(pkg_name))
     jsonObjectPut(new_root, "version", jsonString(pkg_version))
-    if (@lenOf(pkg_main) > 0) {
+    if (pkg_main.len > 0) {
         jsonObjectPut(new_root, "main", jsonString(pkg_main))
     }
     jsonObjectPut(new_root, "safe", jsonBool(true))
@@ -465,7 +465,7 @@ fn cmdLogin() void {
 
     // Store in ~/.cot/credentials
     var home = getHome()
-    if (@lenOf(home) == 0) {
+    if (home.len == 0) {
         eprintln("Cannot determine home directory")
         exit(1)
     }
@@ -499,7 +499,7 @@ fn getHome() string {
     while (i < count) {
         var entry = env(i)
         if (startsWith(entry, "HOME=")) {
-            return substring(entry, 5, @lenOf(entry))
+            return substring(entry, 5, entry.len)
         }
         i += 1
     }
@@ -509,7 +509,7 @@ fn getHome() string {
 /// Read the auth token from ~/.cot/credentials.
 fn readToken() string {
     var home = getHome()
-    if (@lenOf(home) == 0) { return "" }
+    if (home.len == 0) { return "" }
 
     var path_sb: StringBuilder = .{}
     path_sb.append(home)
@@ -524,7 +524,7 @@ fn readToken() string {
 fn downloadPackage(name: string, version: string) void {
     // Build cache directory: ~/.cache/cot/packages/<name>/<version>/
     var home = getHome()
-    if (@lenOf(home) == 0) {
+    if (home.len == 0) {
         eprintln("Cannot determine home directory")
         exit(1)
     }
@@ -625,7 +625,7 @@ fn addDependency(name: string, version: string) void {
     var new_root = jsonObject()
     jsonObjectPut(new_root, "name", jsonString(pkg_name))
     jsonObjectPut(new_root, "version", jsonString(pkg_version))
-    if (@lenOf(pkg_main) > 0) {
+    if (pkg_main.len > 0) {
         jsonObjectPut(new_root, "main", jsonString(pkg_main))
     }
     jsonObjectPut(new_root, "safe", jsonBool(true))
@@ -781,12 +781,3 @@ fn jsonObjKeys(obj: i64) List(string) {
     return result
 }
 
-fn println(s: string) void {
-    fd_write(1, @ptrOf(s), @lenOf(s))
-    fd_write(1, @ptrOf("\n"), 1)
-}
-
-fn eprintln(s: string) void {
-    eprint(s)
-    eprint("\n")
-}

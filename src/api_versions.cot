@@ -93,7 +93,7 @@ fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) st
     var deps: List(Dependency) = .{}
     var body = req.body
     var has_manifest = false
-    if (@lenOf(body) > 0) {
+    if (body.len > 0) {
         var root = parse(body)
         if (root != 0 and jsonTag(root) == JSON_OBJECT) {
             has_manifest = true
@@ -103,13 +103,13 @@ fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) st
             var manifest_version = jsonObjectGetString(root, "version")
 
             // Name in manifest must match URL
-            if (@lenOf(manifest_name) > 0 and manifest_name != name) {
+            if (manifest_name.len > 0 and manifest_name != name) {
                 jsonFree(root)
                 return badRequest("manifest name does not match URL")
             }
 
             // Version in manifest must match URL
-            if (@lenOf(manifest_version) > 0 and manifest_version != version) {
+            if (manifest_version.len > 0 and manifest_version != version) {
                 jsonFree(root)
                 return badRequest("manifest version does not match URL")
             }
@@ -136,7 +136,7 @@ fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) st
 
     // Compute SHA-256 checksum of published content
     var checksum = ""
-    if (@lenOf(body) > 0) {
+    if (body.len > 0) {
         checksum = "sha256:${sha256(body)}"
     }
 
@@ -150,7 +150,7 @@ fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) st
 
     if (db.addVersion(name, ver)) {
         // Store the manifest as cot.json
-        if (has_manifest and @lenOf(body) > 0) {
+        if (has_manifest and body.len > 0) {
             storePackageFile(name, version, "cot.json", body) catch {
                 logError("failed to store cot.json")
             }
@@ -160,7 +160,7 @@ fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) st
         jsonObjectPut(result, "package", jsonString(name))
         jsonObjectPut(result, "version", jsonString(version))
         jsonObjectPut(result, "published", jsonBool(true))
-        if (@lenOf(checksum) > 0) {
+        if (checksum.len > 0) {
             jsonObjectPut(result, "checksum", jsonString(checksum))
         }
         var resp_body = encode(result)

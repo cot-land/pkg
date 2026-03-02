@@ -19,7 +19,7 @@ fn serveStatic(path: string) string {
     // Strip leading /static/ prefix
     var file_path = ""
     if (startsWith(path, "/static/")) {
-        file_path = substring(path, 8, @lenOf(path))
+        file_path = substring(path, 8, path.len)
     } else {
         return notFound()
     }

@@ -42,7 +42,7 @@ fn buildResponse(status: int, content_type: string, body: string) string {
     sb.append(content_type)
     sb.append("\r\n")
     sb.append("Content-Length: ")
-    sb.appendInt(@lenOf(body))
+    sb.appendInt(body.len)
     sb.append("\r\n")
     sb.append("Connection: close\r\n")
     sb.append("\r\n")
@@ -118,13 +118,15 @@ fn serverError() string {
 fn responseStatus(resp: string) string {
     // Find first space (after "HTTP/1.1")
     var i: int = 0
-    while (i < @lenOf(resp) and charAt(resp, i) != 32) {
+    while (i < resp.len) {
+        if (resp[i] == 32) { break }
         i += 1
     }
     i += 1
     // Read digits for status code
     var start = i
-    while (i < @lenOf(resp) and charAt(resp, i) >= 48 and charAt(resp, i) <= 57) {
+    while (i < resp.len) {
+        if (resp[i] < 48 or resp[i] > 57) { break }
         i += 1
     }
     if (i > start) {

@@ -21,7 +21,7 @@ struct Request {
     /// Format: "METHOD /path?query HTTP/1.1\r\nHeaders\r\n\r\nBody"
     /// Ported from Go net/http.ReadRequest.
     static fn parse(data: string) Request {
-        var dlen = @lenOf(data)
+        var dlen = data.len
         if (dlen == 0) {
             return Request {
                 method: "",
@@ -36,7 +36,8 @@ struct Request {
         // Find first space (end of method)
         // Go: readLine → parseRequestLine
         var pos: int = 0
-        while (pos < dlen and charAt(data, pos) != ' ') {
+        while (pos < dlen) {
+            if (data[pos] == ' ') { break }
             pos += 1
         }
         var method = substring(data, 0, pos)
@@ -44,7 +45,8 @@ struct Request {
 
         // Find second space (end of path+query)
         var uri_start = pos
-        while (pos < dlen and charAt(data, pos) != ' ') {
+        while (pos < dlen) {
+            if (data[pos] == ' ') { break }
             pos += 1
         }
         var raw_uri = substring(data, uri_start, pos)
@@ -57,14 +59,14 @@ struct Request {
         var q_idx = indexOf(raw_uri, "?")
         if (q_idx >= 0) {
             path = substring(raw_uri, 0, q_idx)
-            raw_query = substring(raw_uri, q_idx + 1, @lenOf(raw_uri))
+            raw_query = substring(raw_uri, q_idx + 1, raw_uri.len)
         }
 
         // Find end of request line (\r\n)
         // Go: textproto.ReadLine → reads until \r\n
         var ver_start = pos
         while (pos < dlen - 1) {
-            if (charAt(data, pos) == '\r' and charAt(data, pos + 1) == '\n') {
+            if (data[pos] == '\r' and data[pos + 1] == '\n') {
                 break
             }
             pos += 1
@@ -77,7 +79,7 @@ struct Request {
         var hdr_start = pos
         var hdr_end = pos
         while (pos < dlen - 3) {
-            if (charAt(data, pos) == '\r' and charAt(data, pos + 1) == '\n' and charAt(data, pos + 2) == '\r' and charAt(data, pos + 3) == '\n') {
+            if (data[pos] == '\r' and data[pos + 1] == '\n' and data[pos + 2] == '\r' and data[pos + 3] == '\n') {
                 hdr_end = pos
                 pos += 4
                 break
@@ -106,8 +108,8 @@ struct Request {
     /// Ported from Go net/http.Header.Get — case-sensitive lookup in "Key: Value\r\n" block.
     fn header(name: string) string {
         var hdrs = self.headers
-        var hlen = @lenOf(hdrs)
-        var nlen = @lenOf(name)
+        var hlen = hdrs.len
+        var nlen = name.len
         if (hlen == 0 or nlen == 0) { return "" }
 
         // Scan for "name: " at start of each line
@@ -117,7 +119,7 @@ struct Request {
             var at_line_start = false
             if (pos == 0) {
                 at_line_start = true
-            } else if (charAt(hdrs, pos - 1) == '\n') {
+            } else if (hdrs[pos - 1] == '\n') {
                 at_line_start = true
             }
 
@@ -125,16 +127,17 @@ struct Request {
                 var match = true
                 var j: int = 0
                 while (j < nlen and match) {
-                    if (charAt(hdrs, pos + j) != charAt(name, j)) {
+                    if (hdrs[pos + j] != name[j]) {
                         match = false
                     }
                     j += 1
                 }
                 // Check for ": " separator after name
-                if (match and charAt(hdrs, pos + nlen) == ':' and charAt(hdrs, pos + nlen + 1) == ' ') {
+                if (match and hdrs[pos + nlen] == ':' and hdrs[pos + nlen + 1] == ' ') {
                     var val_start = pos + nlen + 2
                     var val_end = val_start
-                    while (val_end < hlen and charAt(hdrs, val_end) != '\r' and charAt(hdrs, val_end) != '\n') {
+                    while (val_end < hlen) {
+                        if (hdrs[val_end] == '\r' or hdrs[val_end] == '\n') { break }
                         val_end += 1
                     }
                     return substring(hdrs, val_start, val_end)
@@ -149,7 +152,7 @@ struct Request {
     /// Returns 0 if not present or invalid.
     fn contentLength() int {
         var cl = self.header("Content-Length")
-        if (@lenOf(cl) == 0) { return 0 }
+        if (cl.len == 0) { return 0 }
         return parseInt(cl)
     }
 }
@@ -164,7 +167,7 @@ struct QueryParam {
 /// Ported from Go net/url.ParseQuery — splits on "&", then on "=".
 fn parseQuery(query: string) List(QueryParam) {
     var params: List(QueryParam) = .{}
-    var qlen = @lenOf(query)
+    var qlen = query.len
     if (qlen == 0) { return params }
 
     // Split on "&"
@@ -178,7 +181,7 @@ fn parseQuery(query: string) List(QueryParam) {
         if (eq_idx >= 0) {
             var param = QueryParam {
                 key: substring(part, 0, eq_idx),
-                value: substring(part, eq_idx + 1, @lenOf(part)),
+                value: substring(part, eq_idx + 1, part.len),
             }
             params.append(param)
         } else {
