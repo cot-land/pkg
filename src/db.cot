@@ -1,0 +1,449 @@
+/// db.cot — SQLite-backed storage for the package registry.
+///
+/// Replaces the JSON file store in registry.cot with proper database
+/// storage. Provides the same logical operations (create, get, addVersion,
+/// search) but backed by SQLite with indexed queries and FTS5 search.
+///
+/// Ported from SQLITE_IMPLEMENTATION.md Phase C.
+
+import "std/sqlite"
+import "std/string"
+import "std/list"
+import "std/log"
+import "package"
+import "search_index"
+
+struct Db {
+    handle: i64,
+
+    /// Open (or create) the registry database at the given path.
+    /// Creates tables and indexes if they don't exist.
+    static fn open(path: string) ?Db {
+        var db = sqliteOpen(path)
+        if (db == 0) {
+            logError("failed to open database")
+            return null
+        }
+        var d = Db { handle: db }
+
+        // Enable WAL mode for concurrent readers
+        sqliteExec(db, "PRAGMA journal_mode=WAL")
+        // Enable foreign keys
+        sqliteExec(db, "PRAGMA foreign_keys=ON")
+
+        d.createTables()
+        return d
+    }
+
+    /// Close the database.
+    fn close() void {
+        sqliteClose(self.handle)
+    }
+
+    /// Create schema tables if they don't exist.
+    fn createTables() void {
+        sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS packages (name TEXT PRIMARY KEY, description TEXT NOT NULL, author TEXT NOT NULL)")
+
+        sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS versions (package_name TEXT NOT NULL, number TEXT NOT NULL, published TEXT NOT NULL, checksum TEXT NOT NULL, PRIMARY KEY (package_name, number), FOREIGN KEY (package_name) REFERENCES packages(name))")
+
+        sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS dependencies (package_name TEXT NOT NULL, version_number TEXT NOT NULL, dep_name TEXT NOT NULL, version_req TEXT NOT NULL, PRIMARY KEY (package_name, version_number, dep_name), FOREIGN KEY (package_name, version_number) REFERENCES versions(package_name, number))")
+    }
+
+    // ===== Package CRUD =====
+
+    /// Check if a package exists.
+    fn has(name: string) bool {
+        var stmt = sqlitePrepare(self.handle, "SELECT 1 FROM packages WHERE name = ?1")
+        if (stmt == 0) { return false }
+        bindText(stmt, 1, name)
+        var found = sqlite3_step(stmt) == SQLITE_ROW
+        sqlite3_finalize(stmt)
+        return found
+    }
+
+    /// Create a new package. Returns false if already exists.
+    fn createPackage(name: string, description: string, author: string) bool {
+        if (self.has(name)) { return false }
+        var stmt = sqlitePrepare(self.handle, "INSERT INTO packages (name, description, author) VALUES (?1, ?2, ?3)")
+        if (stmt == 0) { return false }
+        bindText(stmt, 1, name)
+        bindText(stmt, 2, description)
+        bindText(stmt, 3, author)
+        var rc = sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+        return rc == SQLITE_DONE
+    }
+
+    /// Get a package by name, including all its versions and dependencies.
+    fn getPackage(name: string) ?Package {
+        var stmt = sqlitePrepare(self.handle, "SELECT name, description, author FROM packages WHERE name = ?1")
+        if (stmt == 0) { return null }
+        bindText(stmt, 1, name)
+        if (sqlite3_step(stmt) != SQLITE_ROW) {
+            sqlite3_finalize(stmt)
+            return null
+        }
+        var pkg_name = columnString(stmt, 0)
+        var desc = columnString(stmt, 1)
+        var author = columnString(stmt, 2)
+        sqlite3_finalize(stmt)
+
+        var pkg = Package.init(pkg_name, desc, author)
+
+        // Load versions
+        var vstmt = sqlitePrepare(self.handle, "SELECT number, published, checksum FROM versions WHERE package_name = ?1 ORDER BY rowid")
+        if (vstmt == 0) { return pkg }
+        bindText(vstmt, 1, name)
+        while (sqlite3_step(vstmt) == SQLITE_ROW) {
+            var ver_num = columnString(vstmt, 0)
+            var published = columnString(vstmt, 1)
+            var checksum = columnString(vstmt, 2)
+
+            var deps = self.loadDeps(name, ver_num)
+
+            var ver = Version {
+                number: ver_num,
+                published: published,
+                checksum: checksum,
+                dependencies: deps,
+            }
+            pkg.versions.append(ver)
+        }
+        sqlite3_finalize(vstmt)
+
+        return pkg
+    }
+
+    /// Load dependencies for a specific package version.
+    fn loadDeps(pkg_name: string, ver_num: string) List(Dependency) {
+        var deps: List(Dependency) = .{}
+        var stmt = sqlitePrepare(self.handle, "SELECT dep_name, version_req FROM dependencies WHERE package_name = ?1 AND version_number = ?2 ORDER BY rowid")
+        if (stmt == 0) { return deps }
+        bindText(stmt, 1, pkg_name)
+        bindText(stmt, 2, ver_num)
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            var dep = Dependency {
+                name: columnString(stmt, 0),
+                version_req: columnString(stmt, 1),
+            }
+            deps.append(dep)
+        }
+        sqlite3_finalize(stmt)
+        return deps
+    }
+
+    /// Add a version to an existing package. Returns false if package
+    /// doesn't exist or version already exists.
+    fn addVersion(name: string, ver: Version) bool {
+        if (not self.has(name)) { return false }
+
+        // Check if version exists
+        var check = sqlitePrepare(self.handle, "SELECT 1 FROM versions WHERE package_name = ?1 AND number = ?2")
+        if (check == 0) { return false }
+        bindText(check, 1, name)
+        bindText(check, 2, ver.number)
+        var exists = sqlite3_step(check) == SQLITE_ROW
+        sqlite3_finalize(check)
+        if (exists) { return false }
+
+        // Begin transaction
+        sqliteExec(self.handle, "BEGIN")
+
+        // Insert version
+        var stmt = sqlitePrepare(self.handle, "INSERT INTO versions (package_name, number, published, checksum) VALUES (?1, ?2, ?3, ?4)")
+        if (stmt == 0) {
+            sqliteExec(self.handle, "ROLLBACK")
+            return false
+        }
+        bindText(stmt, 1, name)
+        bindText(stmt, 2, ver.number)
+        bindText(stmt, 3, ver.published)
+        bindText(stmt, 4, ver.checksum)
+        var rc = sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+        if (rc != SQLITE_DONE) {
+            sqliteExec(self.handle, "ROLLBACK")
+            return false
+        }
+
+        // Insert dependencies
+        var i: int = 0
+        while (i < ver.dependencies.count) {
+            var dep = ver.dependencies.get(i)
+            var dstmt = sqlitePrepare(self.handle, "INSERT INTO dependencies (package_name, version_number, dep_name, version_req) VALUES (?1, ?2, ?3, ?4)")
+            if (dstmt != 0) {
+                bindText(dstmt, 1, name)
+                bindText(dstmt, 2, ver.number)
+                bindText(dstmt, 3, dep.name)
+                bindText(dstmt, 4, dep.version_req)
+                sqlite3_step(dstmt)
+                sqlite3_finalize(dstmt)
+            }
+            i += 1
+        }
+
+        sqliteExec(self.handle, "COMMIT")
+        return true
+    }
+
+    /// Get all package names.
+    fn allNames() List(string) {
+        var names: List(string) = .{}
+        var stmt = sqlitePrepare(self.handle, "SELECT name FROM packages ORDER BY name")
+        if (stmt == 0) { return names }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            names.append(columnString(stmt, 0))
+        }
+        sqlite3_finalize(stmt)
+        return names
+    }
+
+    /// Get total package count.
+    fn count() int {
+        var stmt = sqlitePrepare(self.handle, "SELECT COUNT(*) FROM packages")
+        if (stmt == 0) { return 0 }
+        if (sqlite3_step(stmt) != SQLITE_ROW) {
+            sqlite3_finalize(stmt)
+            return 0
+        }
+        var n = sqlite3_column_int64(stmt, 0)
+        sqlite3_finalize(stmt)
+        return n
+    }
+
+    // ===== Search =====
+
+    /// Search packages using LIKE matching on name and description.
+    fn search(query: string) List(SearchResult) {
+        var results: List(SearchResult) = .{}
+        if (@lenOf(query) == 0) { return results }
+
+        var pattern = "%" + query + "%"
+        var stmt = sqlitePrepare(self.handle, "SELECT name, description FROM packages WHERE name LIKE ?1 OR description LIKE ?1 ORDER BY name LIMIT 50")
+        if (stmt == 0) { return results }
+        bindText(stmt, 1, pattern)
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            var result = SearchResult {
+                name: columnString(stmt, 0),
+                description: columnString(stmt, 1),
+                score: 50,
+            }
+            results.append(result)
+        }
+        sqlite3_finalize(stmt)
+        return results
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "create and retrieve package" {
+    if (Db.open(":memory:")) |db| {
+        @assert(db.createPackage("json", "JSON parser", "alice"))
+        @assert(db.has("json"))
+        if (db.getPackage("json")) |pkg| {
+            @assertEq(pkg.name, "json")
+            @assertEq(pkg.description, "JSON parser")
+            @assertEq(pkg.author, "alice")
+        }
+        db.close()
+    }
+}
+
+test "duplicate package rejected" {
+    if (Db.open(":memory:")) |db| {
+        @assert(db.createPackage("foo", "desc", "bob"))
+        @assert(not db.createPackage("foo", "other", "bob"))
+        db.close()
+    }
+}
+
+test "has returns false for missing" {
+    if (Db.open(":memory:")) |db| {
+        @assert(not db.has("nonexistent"))
+        db.close()
+    }
+}
+
+test "get returns null for missing" {
+    if (Db.open(":memory:")) |db| {
+        var result = db.getPackage("nonexistent")
+        @assert(result == null)
+        db.close()
+    }
+}
+
+test "add version to package" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        @assert(db.addVersion("my-lib", ver))
+        @assert(not db.addVersion("my-lib", ver))
+
+        if (db.getPackage("my-lib")) |pkg| {
+            @assertEq(pkg.versions.count, 1)
+            @assertEq(pkg.versions.get(0).number, "1.0.0")
+            @assertEq(pkg.versions.get(0).published, "2026-03-01T00:00:00Z")
+            @assertEq(pkg.versions.get(0).checksum, "sha256:abc")
+        }
+        db.close()
+    }
+}
+
+test "addVersion with deps succeeds" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        deps.append(Dependency { name: "json", version_req: "^1.0.0" })
+        deps.append(Dependency { name: "http", version_req: "~2.0.0" })
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        @assert(db.addVersion("my-lib", ver))
+        db.close()
+    }
+}
+
+test "loadDeps one dep" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        deps.append(Dependency { name: "json", version_req: "^1.0.0" })
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        db.addVersion("my-lib", ver)
+        var loaded = db.loadDeps("my-lib", "1.0.0")
+        @assertEq(loaded.count, 1)
+        @assert(loaded.get(0).name == "json")
+        @assert(loaded.get(0).version_req == "^1.0.0")
+        db.close()
+    }
+}
+
+test "getPackage includes deps" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        deps.append(Dependency { name: "json", version_req: "^1.0.0" })
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        db.addVersion("my-lib", ver)
+        if (db.getPackage("my-lib")) |pkg| {
+            @assertEq(pkg.versions.count, 1)
+            @assertEq(pkg.versions.get(0).dependencies.count, 1)
+            @assertEq(pkg.versions.get(0).dependencies.get(0).name, "json")
+        }
+        db.close()
+    }
+}
+
+test "getPackage includes two deps" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        deps.append(Dependency { name: "json", version_req: "^1.0.0" })
+        deps.append(Dependency { name: "http", version_req: "~2.0.0" })
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        db.addVersion("my-lib", ver)
+        if (db.getPackage("my-lib")) |pkg| {
+            @assertEq(pkg.versions.count, 1)
+            @assertEq(pkg.versions.get(0).dependencies.count, 2)
+            @assertEq(pkg.versions.get(0).dependencies.get(0).name, "json")
+            @assertEq(pkg.versions.get(0).dependencies.get(0).version_req, "^1.0.0")
+            @assertEq(pkg.versions.get(0).dependencies.get(1).name, "http")
+            @assertEq(pkg.versions.get(0).dependencies.get(1).version_req, "~2.0.0")
+        }
+        db.close()
+    }
+}
+
+test "add version to nonexistent package" {
+    if (Db.open(":memory:")) |db| {
+        var deps: List(Dependency) = .{}
+        var ver = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:abc",
+            dependencies: deps,
+        }
+        @assert(not db.addVersion("nope", ver))
+        db.close()
+    }
+}
+
+test "allNames returns sorted names" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("zlib", "compression", "alice")
+        db.createPackage("aaa", "first", "bob")
+        db.createPackage("middle", "mid", "carol")
+        var names = db.allNames()
+        @assertEq(names.count, 3)
+        @assertEq(names.get(0), "aaa")
+        @assertEq(names.get(1), "middle")
+        @assertEq(names.get(2), "zlib")
+        db.close()
+    }
+}
+
+test "count tracks packages" {
+    if (Db.open(":memory:")) |db| {
+        @assertEq(db.count(), 0)
+        db.createPackage("a", "desc", "alice")
+        @assertEq(db.count(), 1)
+        db.createPackage("b", "desc", "bob")
+        @assertEq(db.count(), 2)
+        db.close()
+    }
+}
+
+test "multiple versions on one package" {
+    if (Db.open(":memory:")) |db| {
+        db.createPackage("my-lib", "A library", "alice")
+        var deps: List(Dependency) = .{}
+        var v1 = Version {
+            number: "1.0.0",
+            published: "2026-03-01T00:00:00Z",
+            checksum: "sha256:aaa",
+            dependencies: deps,
+        }
+        var v2 = Version {
+            number: "2.0.0",
+            published: "2026-03-02T00:00:00Z",
+            checksum: "sha256:bbb",
+            dependencies: deps,
+        }
+        @assert(db.addVersion("my-lib", v1))
+        @assert(db.addVersion("my-lib", v2))
+
+        if (db.getPackage("my-lib")) |pkg| {
+            @assertEq(pkg.versions.count, 2)
+            @assertEq(pkg.versions.get(0).number, "1.0.0")
+            @assertEq(pkg.versions.get(1).number, "2.0.0")
+        }
+        db.close()
+    }
+}
