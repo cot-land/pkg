@@ -36,8 +36,7 @@ struct Request {
         // Find first space (end of method)
         // Go: readLine → parseRequestLine
         var pos: int = 0
-        while (pos < dlen) {
-            if (data[pos] == ' ') { break }
+        while (pos < dlen and data[pos] != ' ') {
             pos += 1
         }
         var method = substring(data, 0, pos)
@@ -45,8 +44,7 @@ struct Request {
 
         // Find second space (end of path+query)
         var uri_start = pos
-        while (pos < dlen) {
-            if (data[pos] == ' ') { break }
+        while (pos < dlen and data[pos] != ' ') {
             pos += 1
         }
         var raw_uri = substring(data, uri_start, pos)
@@ -136,8 +134,7 @@ struct Request {
                 if (match and hdrs[pos + nlen] == ':' and hdrs[pos + nlen + 1] == ' ') {
                     var val_start = pos + nlen + 2
                     var val_end = val_start
-                    while (val_end < hlen) {
-                        if (hdrs[val_end] == '\r' or hdrs[val_end] == '\n') { break }
+                    while (val_end < hlen and hdrs[val_end] != '\r' and hdrs[val_end] != '\n') {
                         val_end += 1
                     }
                     return substring(hdrs, val_start, val_end)

@@ -19,10 +19,8 @@ struct SemVer {
 /// Strips leading 'v' if present. Returns null on invalid input.
 fn parseSemver(s: string) ?SemVer {
     var input = s
-    if (input.len > 0) {
-        if (input[0] == 'v') {
-            input = substring(input, 1, input.len)
-        }
+    if (input.len > 0 and input[0] == 'v') {
+        input = substring(input, 1, input.len)
     }
     if (input.len == 0) { return null }
 
@@ -121,14 +119,12 @@ fn semverSatisfies(version: SemVer, range_str: string) bool {
     }
 
     // Greater-than-or-equal: >=X.Y.Z
-    if (rlen > 2 and first == '>') {
-        if (range_str[1] == '=') {
-            var range_ver = parseSemver(substring(range_str, 2, rlen))
-            if (range_ver) |rv| {
-                return semverCompare(version, rv) >= 0
-            }
-            return false
+    if (rlen > 2 and first == '>' and range_str[1] == '=') {
+        var range_ver = parseSemver(substring(range_str, 2, rlen))
+        if (range_ver) |rv| {
+            return semverCompare(version, rv) >= 0
         }
+        return false
     }
 
     // Exact match: X.Y.Z
