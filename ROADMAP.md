@@ -77,16 +77,15 @@ The Cot compiler needs to know about packages. Two pieces:
 
 This is a Zig compiler change, not a Cot change.
 
-### Phase 9: Dependency Resolution
+### Phase 9: Dependency Resolution -- DONE
 
-When `pkg add foo` is run and `foo` depends on `bar`, both need to be installed.
+1. ~~**Semver range matching**~~ — `^`, `~`, `>=`, exact match in `cli/src/semver.cot`
+2. ~~**Transitive dependency resolution**~~ — recursive resolution with constraint accumulation in `cli/src/resolver.cot`
+3. ~~**Conflict detection**~~ — errors when no version satisfies all accumulated constraints
+4. ~~**Lock file**~~ — `cot.lock` records exact resolved versions; `pkg install` uses lock when current
+5. ~~**Caret ranges by default**~~ — `pkg add foo@1.2.3` stores `^1.2.3` in cot.json
 
-1. **Transitive dependency resolution** — recursively fetch all dependencies
-2. **Semver range matching** — `^1.0.0` means `>=1.0.0, <2.0.0`; pick the latest matching version
-3. **Conflict detection** — if two packages require incompatible versions of the same dependency, error clearly
-4. **Lock file** — `cot.lock` records exact resolved versions for reproducible builds
-
-Start simple: flat dependency tree, no duplicates allowed. Add version conflict resolution later.
+Flat dependency tree, no duplicates allowed. One version per package, error on conflict.
 
 ### Phase 10: Auth + User Accounts
 
@@ -113,6 +112,24 @@ Before deploying to `cot.land`:
 6. **Persistence** — consider SQLite via FFI instead of JSON file (concurrent access, crash safety)
 7. **Async I/O** — switch from single-threaded accept loop to `std/async` event loop for concurrent connections
 
+### Phase 12: Fly.io Deployment
+
+Deploy the registry to `cot.land` on Fly.io.
+
+1. **Build pipeline** — Dockerfile that installs the Cot compiler, runs `cot build src/main.cot -o pkg`, and copies the binary into a minimal runtime image
+2. **Persistent volume** — Fly volume mounted at `/data` for `registry.json` and `data/packages/` (package files). Registry must survive deploys and restarts
+3. **fly.toml** — app config: internal port 8080, auto-stop disabled (always-on), single machine (single-threaded server), health check on `GET /`
+4. **HTTPS** — Fly handles TLS termination automatically; no code changes needed
+5. **DNS** — point `cot.land` to the Fly app (CNAME or A record)
+6. **Health check endpoint** — `GET /` already returns the landing page (200 OK), usable as-is
+7. **CLI registry URL** — update `cli/src/commands.cot` REGISTRY_HOST/PORT to point to `cot.land:443` (HTTPS), or make configurable via env var
+8. **Backup** — periodic snapshot of the Fly volume (Fly supports volume snapshots)
+
+**Blockers:**
+- Phase 11 (production hardening) should come first — rate limiting, request size limits, logging
+- The register allocator crash (Bug #1 in MEMORY) must be fixed to build the server binary
+- CLI currently uses raw TCP on port 8080 — needs HTTPS support or a reverse proxy approach for talking to the production registry
+
 ## Priority Order
 
 | Priority | Phase | Status |
@@ -121,9 +138,10 @@ Before deploying to `cot.land`:
 | ~~2~~ | ~~Phase 7: CLI tool~~ | DONE |
 | 3 | Phase 8: Compiler integration | Next |
 | ~~4~~ | ~~Phase 6: Source file serving~~ | DONE |
-| 5 | Phase 9: Dependency resolution | Needed once real packages exist |
+| ~~5~~ | ~~Phase 9: Dependency resolution~~ | DONE |
 | 6 | Phase 10: Auth | Needed before public deployment |
 | 7 | Phase 11: Production hardening | Needed before public deployment |
+| 8 | Phase 12: Fly.io deployment | Blocked by Phase 11 + regalloc bug |
 
 ## Reference
 

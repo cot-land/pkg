@@ -12,12 +12,13 @@ import "std/sys"
 import "std/string"
 import "std/log"
 import "std/fs"
+import "std/crypto"
+import "std/random"
 import "server"
 import "router"
 import "request"
 import "response"
-import "registry"
-import "search_index"
+import "db"
 import "package"
 import "api_packages"
 import "api_versions"
@@ -46,6 +47,21 @@ var ROUTE_API_CREATE_PACKAGE: int = 0
 var ROUTE_API_FILES: int = 0
 var ROUTE_VERSION_DETAIL_PAGE: int = 0
 
+/// Look up an environment variable by name. Returns "" if not found.
+fn getEnvVar(name: string) string {
+    var count = environCount()
+    var prefix = name + "="
+    var i: int = 0
+    while (i < count) {
+        var entry = env(i)
+        if (startsWith(entry, prefix)) {
+            return substring(entry, @lenOf(prefix), @lenOf(entry))
+        }
+        i += 1
+    }
+    return ""
+}
+
 fn main() void {
     // Handle CLI arguments
     if (argsCount() >= 2) {
@@ -58,6 +74,10 @@ fn main() void {
             info("cot.land registry v${VERSION}")
             return
         }
+        if (cmd == "token") {
+            handleTokenCommand()
+            return
+        }
     }
 
     // Ensure data directories exist
@@ -66,52 +86,65 @@ fn main() void {
         exit(1)
     }
 
-    // Initialize registry
-    var reg = Registry.init("data/registry.json")
-    info("cot.land registry v${VERSION}")
-
-    // Create server
-    var srv = Server.init(DEFAULT_PORT)
-
-    // Register routes
-    // Ported from Go http.HandleFunc / http.ServeMux pattern
-    var r = srv.router()
-    ROUTE_INDEX = r.handle("GET /")
-    ROUTE_PACKAGES_PAGE = r.handle("GET /packages")
-    ROUTE_PACKAGE_DETAIL_PAGE = r.handle("GET /packages/:name")
-    ROUTE_SEARCH_PAGE = r.handle("GET /search")
-    ROUTE_STATIC = r.handle("GET /static/*")
-
-    // API routes
-    ROUTE_API_PACKAGES = r.handle("GET /api/packages")
-    ROUTE_API_PACKAGE = r.handle("GET /api/packages/:name")
-    ROUTE_API_PACKAGE_VERSION = r.handle("GET /api/packages/:name/:version")
-    ROUTE_API_SEARCH = r.handle("GET /api/search")
-    ROUTE_API_PUBLISH = r.handle("POST /api/packages/:name/:version")
-    ROUTE_API_CREATE_PACKAGE = r.handle("POST /api/packages")
-    ROUTE_API_FILES = r.handle("GET /api/packages/:name/:version/files/*")
-    ROUTE_VERSION_DETAIL_PAGE = r.handle("GET /packages/:name/:version")
-
-    // Start listening
-    srv.listen() catch {
-        logError("failed to start server on port ${intToString(DEFAULT_PORT)}")
-        exit(1)
+    // Determine port — Fly.io sets PORT env var
+    var port = DEFAULT_PORT
+    var port_str = getEnvVar("PORT")
+    if (@lenOf(port_str) > 0) {
+        port = parseInt(port_str)
     }
 
-    // Accept loop
-    // Ported from Go http.Server.Serve — accept connections and dispatch
-    while (true) {
-        if (srv.acceptOne()) |sreq| {
-            var resp = dispatch(&reg, sreq)
-            srv.respond(sreq.client_fd, resp)
+    // Initialize database
+    if (Db.open("data/registry.db")) |db| {
+        info("cot.land registry v${VERSION}")
+
+        // Create server
+        var srv = Server.init(port)
+
+        // Register routes
+        // Ported from Go http.HandleFunc / http.ServeMux pattern
+        var r = srv.router()
+        ROUTE_INDEX = r.handle("GET /")
+        ROUTE_PACKAGES_PAGE = r.handle("GET /packages")
+        ROUTE_PACKAGE_DETAIL_PAGE = r.handle("GET /packages/:name")
+        ROUTE_SEARCH_PAGE = r.handle("GET /search")
+        ROUTE_STATIC = r.handle("GET /static/*")
+
+        // API routes
+        ROUTE_API_PACKAGES = r.handle("GET /api/packages")
+        ROUTE_API_PACKAGE = r.handle("GET /api/packages/:name")
+        ROUTE_API_PACKAGE_VERSION = r.handle("GET /api/packages/:name/:version")
+        ROUTE_API_SEARCH = r.handle("GET /api/search")
+        ROUTE_API_PUBLISH = r.handle("POST /api/packages/:name/:version")
+        ROUTE_API_CREATE_PACKAGE = r.handle("POST /api/packages")
+        ROUTE_API_FILES = r.handle("GET /api/packages/:name/:version/files/*")
+        ROUTE_VERSION_DETAIL_PAGE = r.handle("GET /packages/:name/:version")
+
+        // Start listening
+        srv.listen() catch {
+            logError("failed to start server on port ${intToString(port)}")
+            exit(1)
         }
+
+        // Accept loop
+        // Ported from Go http.Server.Serve — accept connections and dispatch
+        while (true) {
+            if (srv.acceptOne()) |sreq| {
+                var resp = dispatch(&db, sreq)
+                var status = responseStatus(resp)
+                info("${sreq.req.method} ${sreq.req.path} ${status}")
+                srv.respond(sreq.client_fd, resp)
+            }
+        }
+    } else {
+        logError("failed to open database")
+        exit(1)
     }
 }
 
 /// Dispatch a matched request to the appropriate handler.
 /// Uses handler IDs from the router match — switch-based dispatch
 /// instead of function pointers.
-fn dispatch(reg: *Registry, sreq: ServerRequest) string {
+fn dispatch(db: *Db, sreq: ServerRequest) string {
     var req = sreq.req
     var route = sreq.route
 
@@ -131,12 +164,12 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
         return htmlResponse(200, landingPage())
     }
     if (id == ROUTE_PACKAGES_PAGE) {
-        var names = reg.allNames()
+        var names = db.allNames()
         var pkgs: List(Package) = .{}
         var i: int = 0
         while (i < names.count) {
             var name = names.get(i)
-            if (reg.get(name)) |pkg| {
+            if (db.getPackage(name)) |pkg| {
                 pkgs.append(pkg)
             }
             i += 1
@@ -145,7 +178,7 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
     }
     if (id == ROUTE_PACKAGE_DETAIL_PAGE) {
         var name = paramGet(route, "name")
-        if (reg.get(name)) |pkg| {
+        if (db.getPackage(name)) |pkg| {
             return htmlResponse(200, packageDetailPage(pkg))
         }
         return htmlResponse(404, notFoundPage())
@@ -153,17 +186,7 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
     if (id == ROUTE_SEARCH_PAGE) {
         var params = parseQuery(req.raw_query)
         var q = queryGet(params, "q")
-        var names = reg.allNames()
-        var pkgs: List(Package) = .{}
-        var i: int = 0
-        while (i < names.count) {
-            var name = names.get(i)
-            if (reg.get(name)) |pkg| {
-                pkgs.append(pkg)
-            }
-            i += 1
-        }
-        var results = searchPackages(pkgs, q)
+        var results = db.search(q)
         return htmlResponse(200, searchPage(q, results))
     }
     if (id == ROUTE_STATIC) {
@@ -173,23 +196,23 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
     // API routes
     if (id == ROUTE_API_PACKAGES) {
         if (req.method == "GET") {
-            return handleListPackages(reg)
+            return handleListPackages(db)
         }
         return methodNotAllowed()
     }
     if (id == ROUTE_API_PACKAGE) {
         var name = paramGet(route, "name")
-        return handleGetPackage(reg, name)
+        return handleGetPackage(db, name)
     }
     if (id == ROUTE_API_PACKAGE_VERSION) {
         var name = paramGet(route, "name")
         var version = paramGet(route, "version")
-        return handleGetVersion(reg, name, version)
+        return handleGetVersion(db, name, version)
     }
     if (id == ROUTE_API_SEARCH) {
         var params = parseQuery(req.raw_query)
         var q = queryGet(params, "q")
-        return handleSearch(reg, q)
+        return handleSearch(db, q)
     }
     if (id == ROUTE_API_FILES) {
         var name = paramGet(route, "name")
@@ -210,7 +233,7 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
     if (id == ROUTE_VERSION_DETAIL_PAGE) {
         var name = paramGet(route, "name")
         var version = paramGet(route, "version")
-        if (reg.get(name)) |pkg| {
+        if (db.getPackage(name)) |pkg| {
             if (pkg.getVersion(version)) |ver| {
                 return htmlResponse(200, versionDetailPage(pkg, ver))
             }
@@ -218,32 +241,74 @@ fn dispatch(reg: *Registry, sreq: ServerRequest) string {
         return htmlResponse(404, notFoundPage())
     }
     if (id == ROUTE_API_PUBLISH) {
-        // Auth required — ported from JSR publish auth check
-        var token = extractBearerToken(req)
-        if (@lenOf(token) == 0) {
+        // Auth required — validate token against database
+        var owner = validateRequest(db, req)
+        if (owner == null) {
             return unauthorized()
         }
         var name = paramGet(route, "name")
         var version = paramGet(route, "version")
-        return handlePublishVersion(reg, name, version, req)
+        return handlePublishVersion(db, name, version, req)
     }
     if (id == ROUTE_API_CREATE_PACKAGE) {
-        // Auth required
-        var token = extractBearerToken(req)
-        if (@lenOf(token) == 0) {
+        // Auth required — validate token against database
+        var owner = validateRequest(db, req)
+        if (owner == null) {
             return unauthorized()
         }
-        return handleCreatePackage(reg, req)
+        return handleCreatePackage(db, req)
     }
 
     return notFound()
+}
+
+/// Handle the "token create <owner>" CLI subcommand.
+fn handleTokenCommand() void {
+    if (argsCount() < 4) {
+        fd_write(1, @ptrOf("Usage: pkg token create <owner>\n"), 31)
+        exit(1)
+    }
+    var subcmd = arg(2)
+    if (subcmd != "create") {
+        fd_write(1, @ptrOf("Usage: pkg token create <owner>\n"), 31)
+        exit(1)
+    }
+    var owner = arg(3)
+
+    // Ensure data directory exists
+    makeDirAll("data/packages") catch {
+        logError("failed to create data directories")
+        exit(1)
+    }
+
+    // Generate raw token: sha256 of random data
+    var raw_token = sha256(intToString(randomInt()) + intToString(randomInt()))
+
+    // Hash the raw token for storage
+    var token_hash = sha256(raw_token)
+
+    if (Db.open("data/registry.db")) |db| {
+        if (db.createToken(token_hash, owner, "cli-generated", "2026-03-02")) {
+            // Print raw token to stdout for the user to copy
+            fd_write(1, @ptrOf(raw_token), @lenOf(raw_token))
+            fd_write(1, @ptrOf("\n"), 1)
+        } else {
+            logError("failed to create token")
+            exit(1)
+        }
+        db.close()
+    } else {
+        logError("failed to open database")
+        exit(1)
+    }
 }
 
 fn printUsage() void {
     fd_write(1, @ptrOf("cot.land — the Cot package registry\n\n"), 38)
     fd_write(1, @ptrOf("Usage: pkg [command]\n\n"), 21)
     fd_write(1, @ptrOf("Commands:\n"), 10)
-    fd_write(1, @ptrOf("  (none)     Start the registry server\n"), 38)
-    fd_write(1, @ptrOf("  version    Print version\n"), 26)
-    fd_write(1, @ptrOf("  help       Print this help\n"), 28)
+    fd_write(1, @ptrOf("  (none)           Start the registry server\n"), 45)
+    fd_write(1, @ptrOf("  token create <o> Generate auth token for owner\n"), 49)
+    fd_write(1, @ptrOf("  version          Print version\n"), 32)
+    fd_write(1, @ptrOf("  help             Print this help\n"), 34)
 }

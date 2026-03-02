@@ -2,5 +2,6 @@
   "name": "pkg",
   "version": "0.1.0",
   "main": "src/main.cot",
-  "safe": true
+  "safe": true,
+  "libs": ["sqlite3"]
 }

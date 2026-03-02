@@ -7,30 +7,17 @@ import "std/list"
 import "std/json"
 import "response"
 import "request"
-import "registry"
-import "search_index"
+import "db"
 import "package"
 
 /// GET /api/search?q=term — search packages by keyword.
 /// Ported from JSR GET /api/packages (with search query parameter).
-fn handleSearch(reg: *Registry, query: string) string {
-    // Collect all packages into a list for searching
-    var names = reg.allNames()
-    var packages: List(Package) = .{}
-    var i: int = 0
-    while (i < names.count) {
-        var name = names.get(i)
-        if (reg.get(name)) |pkg| {
-            packages.append(pkg)
-        }
-        i += 1
-    }
-
-    var results = searchPackages(packages, query)
+fn handleSearch(db: *Db, query: string) string {
+    var results = db.search(query)
 
     // Build JSON response
     var arr = jsonArray()
-    i = 0
+    var i: int = 0
     while (i < results.count) {
         var r = results.get(i)
         var obj = jsonObject()

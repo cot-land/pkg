@@ -78,31 +78,36 @@ cot test src/router.cot             # Run router tests
 cot test src/request.cot            # Run request parsing tests
 cot build src/main.cot -o pkg       # Build the server binary
 ./pkg                               # Start server on port 8080
+./pkg token create <owner>          # Generate auth token for owner
 
 # CLI tool
 cd cli/
 cot check src/main.cot              # Type-check CLI
 cot build src/main.cot -o pkg-cli   # Build CLI binary
 ./pkg-cli help                      # Show CLI usage
+
+# Deployment
+cot build src/main.cot -o pkg --target=amd64-linux  # Cross-compile for Fly.io
+fly deploy                          # Deploy to Fly.io
 ```
 
 ## Architecture
 
 ```
-src/main.cot              Entry point — starts HTTP server, route dispatch
+src/main.cot              Entry point — server, route dispatch, token CLI, env config
 src/server.cot            HTTP server loop (accept, parse, route, respond)
 src/router.cot            URL pattern matching + :param extraction
 src/request.cot           Request struct, query string parsing
-src/response.cot          Response builders (JSON, HTML, status codes)
+src/response.cot          Response builders (JSON, HTML, status codes, status extraction)
+src/db.cot                SQLite storage (packages, versions, deps, tokens)
 src/package.cot           Package, Version, Dependency structs
 src/user.cot              User, ApiToken structs
-src/registry.cot          Package metadata store (in-memory + JSON persistence)
 src/files.cot             Package file storage (on disk)
 src/search_index.cot      Search index (in-memory text matching)
 src/api_packages.cot      GET/POST /api/packages, GET /api/packages/:name
 src/api_versions.cot      GET /api/packages/:name/:version, publish
 src/api_search.cot        GET /api/search?q=...
-src/api_auth.cot          Token validation, Bearer auth
+src/api_auth.cot          Token validation, Bearer auth, DB-backed token verification
 src/web_pages.cot         HTML pages (landing, package list, detail, search)
 src/web_templates.cot     HTML template helpers (head, nav, footer, layout)
 src/web_static.cot        Static file serving (CSS)
@@ -111,6 +116,8 @@ src/semver_check.cot      Semver validation (manual, avoids std/semver name coll
 cli/src/main.cot          CLI entry point, argument parsing
 cli/src/commands.cot      All CLI commands (init, publish, add, search, etc.)
 cli/src/http_client.cot   HTTP client for registry API calls
+cli/src/semver.cot        Semver parsing, comparison, range matching (^, ~, >=, exact)
+cli/src/resolver.cot      Transitive dependency resolution with constraint accumulation
 ```
 
 **Note:** All source files are flat in `src/` because Cot resolves imports relative to the importing file's directory. No `..` import paths. This matches cotty's pattern.
@@ -121,8 +128,9 @@ HTTP Request → server.cot (accept + read)
   → router.cot (match route pattern, extract params)
   → main.cot dispatch() (handler ID switch)
     → api_packages.cot / api_versions.cot / api_search.cot (API handlers)
+    → api_auth.cot (token validation via DB)
     → web_pages.cot (HTML page handlers)
-    → registry.cot / files.cot (data access)
+    → db.cot / files.cot (data access)
     → response.cot (build Response)
   → server.cot (write response, close connection)
 ```
@@ -135,22 +143,24 @@ HTTP Request → server.cot (accept + read)
 | `src/router.cot` | `net/http/routing_tree.go` (ServeMux pattern matching) |
 | `src/request.cot` | `net/http/request.go` (ReadRequest, parseForm) |
 | `src/response.cot` | `net/http/server.go` (response.Write, WriteHeader) |
-| `src/registry.cot` | Go module index (in-memory map + JSON persistence) |
+| `src/db.cot` | Go module index (SQLite-backed) |
 | `src/files.cot` | Go module cache (package file storage on disk) |
+| `src/api_auth.cot` | JSR `api/src/token.rs` (token validation) |
 
 ## Testing
 
 ```bash
+cot test src/db.cot                # DB operations + token auth (26 tests)
 cot test src/router.cot            # Router pattern matching (15 tests)
 cot test src/request.cot           # Query string parsing (7 tests)
-cot test src/response.cot          # Response building (5 tests)
-cot test src/registry.cot          # Registry persistence (8 tests)
+cot test src/response.cot          # Response building (6 tests)
+cot test src/api_auth.cot          # Auth + token validation (3 tests)
 cot test src/search_index.cot      # Search matching (10 tests)
 cot test src/semver_check.cot      # Semver validation (2 tests)
 cot check src/main.cot             # Full type-check (all files)
 ```
 
-Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them. 42 unique tests across all modules. Note: `cot test` runs tests from imported modules transitively, so counts above include transitive tests.
+Every file has inline `test "name" { }` blocks. Run `cot test <file>` to execute them. Note: `cot test` runs tests from imported modules transitively, so counts above include transitive tests.
 
 ## Documents
 

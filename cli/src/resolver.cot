@@ -1,0 +1,388 @@
+/// Transitive dependency resolver.
+///
+/// Resolves the full dependency tree for a set of direct dependencies.
+/// Fetches version metadata from the registry API, accumulates constraints,
+/// and picks the latest matching version for each package.
+///
+/// Algorithm: latest-matching with constraint accumulation.
+/// Conflict policy: one version per package, error on conflict.
+
+import "std/string"
+import "std/list"
+import "std/json"
+import "std/os"
+import "std/sys"
+import "http_client"
+import "semver"
+
+/// A resolved dependency — name, exact version, and checksum.
+struct ResolvedDep {
+    name: string,
+    version: string,
+    checksum: string,
+}
+
+/// A dependency requirement — name and semver range string.
+struct Requirement {
+    name: string,
+    range: string,
+}
+
+/// A queued work item for the resolver.
+struct WorkItem {
+    name: string,
+    range: string,
+}
+
+/// Resolve transitive dependencies starting from direct requirements.
+///
+/// Returns a list of all resolved packages (direct + transitive).
+/// Errors by printing to stderr and calling exit(1) on conflicts.
+fn resolve(host: string, port: int, direct_deps: List(Requirement)) List(ResolvedDep) {
+    var resolved: List(ResolvedDep) = .{}
+
+    // Parallel lists for constraint tracking: name → list of range strings
+    // constraint_names[i] corresponds to constraint_ranges[i] (semicolon-separated ranges)
+    var constraint_names: List(string) = .{}
+    var constraint_ranges: List(string) = .{}
+
+    // Resolved versions: parallel lists resolved_names[i] → resolved_versions[i]
+    var resolved_names: List(string) = .{}
+    var resolved_versions: List(string) = .{}
+
+    // Visited (name, version) pairs to prevent infinite loops
+    var visited: List(string) = .{}
+
+    // Work queue
+    var queue: List(WorkItem) = .{}
+
+    // Seed queue with direct dependencies
+    var i: int = 0
+    while (i < direct_deps.count) {
+        var dep = direct_deps.get(i)
+        queue.append(WorkItem { name: dep.name, range: dep.range })
+        i += 1
+    }
+
+    // Process queue
+    while (queue.count > 0) {
+        var item = queue.pop()
+        var name = item.name
+        var range = item.range
+
+        // Add range to constraints for this package
+        addConstraint(&constraint_names, &constraint_ranges, name, range)
+
+        // Fetch all versions for this package
+        var versions = fetchVersionList(host, port, name)
+        if (versions.count == 0) {
+            eprint("Error: no versions found for '${name}'\n")
+            exit(1)
+        }
+
+        // Collect all constraints for this package
+        var all_ranges = getConstraints(constraint_names, constraint_ranges, name)
+
+        // Find latest version satisfying ALL constraints
+        var best = findBestMatchAll(versions, all_ranges)
+        if (@lenOf(best) == 0) {
+            eprint("Error: version conflict for '${name}' — no version satisfies all constraints\n")
+            exit(1)
+        }
+
+        // Check if already resolved to the same version
+        var existing = getResolved(resolved_names, resolved_versions, name)
+        if (@lenOf(existing) > 0) {
+            if (existing == best) {
+                // Already resolved to the same version, skip
+                continue
+            }
+            // Different version needed — update and re-process deps
+            setResolved(&resolved_names, &resolved_versions, name, best)
+        } else {
+            // New resolution
+            resolved_names.append(name)
+            resolved_versions.append(best)
+        }
+
+        // Check for cycles
+        var visit_key_sb: StringBuilder = .{}
+        visit_key_sb.append(name)
+        visit_key_sb.append("@")
+        visit_key_sb.append(best)
+        var visit_key = visit_key_sb.toString()
+
+        var already_visited = false
+        var vi: int = 0
+        while (vi < visited.count) {
+            if (visited.get(vi) == visit_key) {
+                already_visited = true
+                break
+            }
+            vi += 1
+        }
+        if (already_visited) { continue }
+        visited.append(visit_key)
+
+        // Fetch dependencies of resolved version and add to queue
+        var sub_deps = fetchDepList(host, port, name, best)
+        var si: int = 0
+        while (si < sub_deps.count) {
+            var sd = sub_deps.get(si)
+            queue.append(WorkItem { name: sd.name, range: sd.range })
+            si += 1
+        }
+    }
+
+    // Build final result with checksums
+    i = 0
+    while (i < resolved_names.count) {
+        var name = resolved_names.get(i)
+        var version = resolved_versions.get(i)
+        var checksum = fetchChecksum(host, port, name, version)
+        resolved.append(ResolvedDep {
+            name: name,
+            version: version,
+            checksum: checksum,
+        })
+        i += 1
+    }
+
+    return resolved
+}
+
+/// Fetch the list of available versions for a package.
+/// GET /api/packages/:name → parse versions array, extract version strings.
+fn fetchVersionList(host: string, port: int, name: string) List(string) {
+    var result: List(string) = .{}
+
+    var path_sb: StringBuilder = .{}
+    path_sb.append("/api/packages/")
+    path_sb.append(name)
+    var resp = httpGet(host, port, path_sb.toString())
+
+    if (not resp.ok) { return result }
+
+    var root = parse(resp.body)
+    if (root == 0) { return result }
+
+    var versions = jsonObjectGet(root, "versions")
+    if (versions != 0 and jsonTag(versions) == JSON_ARRAY) {
+        var count = jsonArrayLen(versions)
+        var i: int = 0
+        while (i < count) {
+            var v = jsonArrayGet(versions, i)
+            var ver = jsonObjectGetString(v, "version")
+            if (@lenOf(ver) > 0) {
+                result.append(ver)
+            }
+            i += 1
+        }
+    }
+    jsonFree(root)
+    return result
+}
+
+/// Fetch dependencies of a specific package version.
+/// GET /api/packages/:name/:version → parse dependencies array.
+fn fetchDepList(host: string, port: int, name: string, version: string) List(Requirement) {
+    var result: List(Requirement) = .{}
+
+    var path_sb: StringBuilder = .{}
+    path_sb.append("/api/packages/")
+    path_sb.append(name)
+    path_sb.append("/")
+    path_sb.append(version)
+    var resp = httpGet(host, port, path_sb.toString())
+
+    if (not resp.ok) { return result }
+
+    var root = parse(resp.body)
+    if (root == 0) { return result }
+
+    var deps = jsonObjectGet(root, "dependencies")
+    if (deps != 0 and jsonTag(deps) == JSON_ARRAY) {
+        var count = jsonArrayLen(deps)
+        var i: int = 0
+        while (i < count) {
+            var dep = jsonArrayGet(deps, i)
+            var dep_name = jsonObjectGetString(dep, "name")
+            var dep_ver = jsonObjectGetString(dep, "version")
+            if (@lenOf(dep_name) > 0 and @lenOf(dep_ver) > 0) {
+                result.append(Requirement { name: dep_name, range: dep_ver })
+            }
+            i += 1
+        }
+    }
+    jsonFree(root)
+    return result
+}
+
+/// Fetch the checksum for a specific version.
+/// GET /api/packages/:name/:version → extract checksum field.
+fn fetchChecksum(host: string, port: int, name: string, version: string) string {
+    var path_sb: StringBuilder = .{}
+    path_sb.append("/api/packages/")
+    path_sb.append(name)
+    path_sb.append("/")
+    path_sb.append(version)
+    var resp = httpGet(host, port, path_sb.toString())
+
+    if (not resp.ok) { return "" }
+
+    var root = parse(resp.body)
+    if (root == 0) { return "" }
+
+    var checksum = jsonObjectGetString(root, "checksum")
+    jsonFree(root)
+    return checksum
+}
+
+/// Find the latest version that satisfies ALL range constraints.
+fn findBestMatchAll(versions: List(string), ranges: List(string)) string {
+    var best = ""
+    var best_ver: SemVer = SemVer { major: 0, minor: 0, patch: 0 }
+    var found = false
+
+    var i: int = 0
+    while (i < versions.count) {
+        var vs = versions.get(i)
+        var parsed = parseSemver(vs)
+        if (parsed) |v| {
+            // Check against ALL ranges
+            var satisfies_all = true
+            var ri: int = 0
+            while (ri < ranges.count) {
+                if (not semverSatisfies(v, ranges.get(ri))) {
+                    satisfies_all = false
+                    break
+                }
+                ri += 1
+            }
+            if (satisfies_all) {
+                if (not found or semverCompare(v, best_ver) > 0) {
+                    best = vs
+                    best_ver = v
+                    found = true
+                }
+            }
+        }
+        i += 1
+    }
+    return best
+}
+
+// ============================================================================
+// Constraint tracking helpers (parallel lists)
+// ============================================================================
+
+/// Add a range constraint for a package.
+fn addConstraint(names: *List(string), ranges: *List(string), name: string, range: string) void {
+    // Find existing entry
+    var i: int = 0
+    while (i < names.count) {
+        if (names.get(i) == name) {
+            // Append range with semicolon separator
+            var sb: StringBuilder = .{}
+            sb.append(ranges.get(i))
+            sb.append(";")
+            sb.append(range)
+            ranges.set(i, sb.toString())
+            return
+        }
+        i += 1
+    }
+    // New package
+    names.append(name)
+    ranges.append(range)
+}
+
+/// Get all constraint ranges for a package as a list.
+fn getConstraints(names: List(string), ranges: List(string), name: string) List(string) {
+    var result: List(string) = .{}
+    var i: int = 0
+    while (i < names.count) {
+        if (names.get(i) == name) {
+            // Split semicolon-separated ranges
+            splitInto(ranges.get(i), ";", &result)
+            return result
+        }
+        i += 1
+    }
+    return result
+}
+
+/// Get the currently resolved version for a package.
+fn getResolved(names: List(string), versions: List(string), name: string) string {
+    var i: int = 0
+    while (i < names.count) {
+        if (names.get(i) == name) {
+            return versions.get(i)
+        }
+        i += 1
+    }
+    return ""
+}
+
+/// Set or update the resolved version for a package.
+fn setResolved(names: *List(string), versions: *List(string), name: string, version: string) void {
+    var i: int = 0
+    while (i < names.count) {
+        if (names.get(i) == name) {
+            versions.set(i, version)
+            return
+        }
+        i += 1
+    }
+    names.append(name)
+    versions.append(version)
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "findBestMatchAll with multiple constraints" {
+    var versions: List(string) = .{}
+    versions.append("1.0.0")
+    versions.append("1.1.0")
+    versions.append("1.2.0")
+    versions.append("1.3.0")
+    versions.append("2.0.0")
+
+    // ^1.0.0 AND ~1.1.0 → must be >=1.1.0 <1.2.0 AND >=1.0.0 <2.0.0 → 1.1.0
+    var ranges: List(string) = .{}
+    ranges.append("^1.0.0")
+    ranges.append("~1.1.0")
+    @assertEq(findBestMatchAll(versions, ranges), "1.1.0")
+}
+
+test "findBestMatchAll conflict" {
+    var versions: List(string) = .{}
+    versions.append("1.0.0")
+    versions.append("2.0.0")
+
+    // ^1.0.0 AND ^2.0.0 → no version can satisfy both
+    var ranges: List(string) = .{}
+    ranges.append("^1.0.0")
+    ranges.append("^2.0.0")
+    @assertEq(findBestMatchAll(versions, ranges), "")
+}
+
+test "constraint tracking" {
+    var names: List(string) = .{}
+    var ranges: List(string) = .{}
+
+    addConstraint(&names, &ranges, "foo", "^1.0.0")
+    addConstraint(&names, &ranges, "foo", "~1.2.0")
+    addConstraint(&names, &ranges, "bar", ">=2.0.0")
+
+    var foo_ranges = getConstraints(names, ranges, "foo")
+    @assertEq(foo_ranges.count, 2)
+    @assertEq(foo_ranges.get(0), "^1.0.0")
+    @assertEq(foo_ranges.get(1), "~1.2.0")
+
+    var bar_ranges = getConstraints(names, ranges, "bar")
+    @assertEq(bar_ranges.count, 1)
+    @assertEq(bar_ranges.get(0), ">=2.0.0")
+}

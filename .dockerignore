@@ -1,0 +1,6 @@
+references/
+data/
+*.md
+cli/
+stdlib/
+.git/

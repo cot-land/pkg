@@ -8,18 +8,18 @@ import "std/json"
 import "response"
 import "request"
 import "router"
-import "registry"
+import "db"
 import "package"
 
 /// GET /api/packages — list all packages.
 /// Ported from JSR GET /api/scopes/:scope/packages.
-fn handleListPackages(reg: *Registry) string {
-    var names = reg.allNames()
+fn handleListPackages(db: *Db) string {
+    var names = db.allNames()
     var arr = jsonArray()
     var i: int = 0
     while (i < names.count) {
         var name = names.get(i)
-        if (reg.get(name)) |pkg| {
+        if (db.getPackage(name)) |pkg| {
             var obj = jsonObject()
             jsonObjectPut(obj, "name", jsonString(pkg.name))
             jsonObjectPut(obj, "description", jsonString(pkg.description))
@@ -39,8 +39,8 @@ fn handleListPackages(reg: *Registry) string {
 
 /// GET /api/packages/:name — get package detail.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package.
-fn handleGetPackage(reg: *Registry, name: string) string {
-    if (reg.get(name)) |pkg| {
+fn handleGetPackage(db: *Db, name: string) string {
+    if (db.getPackage(name)) |pkg| {
         return jsonResponse(200, pkg.toJson())
     }
     return notFound()
@@ -48,7 +48,7 @@ fn handleGetPackage(reg: *Registry, name: string) string {
 
 /// POST /api/packages — create a new package.
 /// Ported from JSR POST /api/scopes/:scope/packages.
-fn handleCreatePackage(reg: *Registry, req: Request) string {
+fn handleCreatePackage(db: *Db, req: Request) string {
     var body = req.body
     if (@lenOf(body) == 0) {
         return badRequest("empty body")
@@ -72,11 +72,11 @@ fn handleCreatePackage(reg: *Registry, req: Request) string {
         return badRequest("invalid package name")
     }
 
-    if (reg.has(name)) {
+    if (db.has(name)) {
         return jsonResponse(409, "{\"error\":\"package already exists\"}")
     }
 
-    reg.create(name, description, author)
+    db.createPackage(name, description, author)
 
     var result = jsonObject()
     jsonObjectPut(result, "name", jsonString(name))

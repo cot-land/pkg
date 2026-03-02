@@ -10,6 +10,8 @@ import "std/json"
 import "std/os"
 import "std/sys"
 import "http_client"
+import "semver"
+import "resolver"
 
 /// Registry connection settings.
 const REGISTRY_HOST: string = "localhost"
@@ -208,6 +210,8 @@ fn cmdPublish() void {
 // ============================================================================
 
 /// Add a dependency to cot.json and download it.
+/// Stores the dependency as a caret range (^X.Y.Z) and runs full
+/// transitive resolution, downloading all resolved packages.
 fn cmdAdd(spec: string) void {
     // Parse name[@version]
     var name = spec
@@ -258,15 +262,33 @@ fn cmdAdd(spec: string) void {
         exit(1)
     }
 
+    // Store as caret range in cot.json
+    var range_sb: StringBuilder = .{}
+    range_sb.append("^")
+    range_sb.append(version)
+    var range_str = range_sb.toString()
+
     println("Adding ${name}@${version}...")
+    addDependency(name, range_str)
 
-    // Download package files
-    downloadPackage(name, version)
+    // Run full transitive resolution
+    var direct = readDirectDeps()
+    println("Resolving dependencies...")
+    var resolved = resolve(REGISTRY_HOST, REGISTRY_PORT, direct)
 
-    // Update cot.json
-    addDependency(name, version)
+    // Download all resolved packages
+    var i: int = 0
+    while (i < resolved.count) {
+        var dep = resolved.get(i)
+        println("  Installing ${dep.name}@${dep.version}")
+        downloadPackage(dep.name, dep.version)
+        i += 1
+    }
 
-    println("Added ${name}@${version}")
+    // Write lock file
+    writeLockFile(resolved)
+
+    println("Added ${name}@${version} (${intToString(resolved.count)} packages resolved)")
 }
 
 // ============================================================================
@@ -274,44 +296,44 @@ fn cmdAdd(spec: string) void {
 // ============================================================================
 
 /// Install all dependencies from cot.json.
+/// If cot.lock exists and is current, installs from lock (no resolution).
+/// Otherwise resolves, writes lock, then installs.
 fn cmdInstall() void {
-    var manifest = readFile("cot.json") catch {
-        eprintln("No cot.json found")
-        exit(1)
-        return
-    }
-
-    var root = parse(manifest)
-    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
-        eprintln("Invalid cot.json")
-        exit(1)
-    }
-
-    var deps = jsonObjectGet(root, "dependencies")
-    if (deps == 0 or jsonTag(deps) != JSON_OBJECT) {
+    var direct = readDirectDeps()
+    if (direct.count == 0) {
         println("No dependencies to install.")
-        jsonFree(root)
         return
     }
 
-    var dep_keys = jsonObjKeys(deps)
-    if (dep_keys.count == 0) {
-        println("No dependencies to install.")
-        jsonFree(root)
+    // Try lock file first
+    var locked = readLockFile()
+    if (locked.count > 0 and isLockCurrent(direct, locked)) {
+        println("Installing from lock file...")
+        var i: int = 0
+        while (i < locked.count) {
+            var dep = locked.get(i)
+            println("  Installing ${dep.name}@${dep.version}")
+            downloadPackage(dep.name, dep.version)
+            i += 1
+        }
+        println("Done (${intToString(locked.count)} packages).")
         return
     }
+
+    // Resolve and write lock
+    println("Resolving dependencies...")
+    var resolved = resolve(REGISTRY_HOST, REGISTRY_PORT, direct)
 
     var i: int = 0
-    while (i < dep_keys.count) {
-        var dep_name = dep_keys.get(i)
-        var dep_ver = jsonObjectGetString(deps, dep_name)
-        println("Installing ${dep_name}@${dep_ver}...")
-        downloadPackage(dep_name, dep_ver)
+    while (i < resolved.count) {
+        var dep = resolved.get(i)
+        println("  Installing ${dep.name}@${dep.version}")
+        downloadPackage(dep.name, dep.version)
         i += 1
     }
 
-    jsonFree(root)
-    println("Done.")
+    writeLockFile(resolved)
+    println("Done (${intToString(resolved.count)} packages).")
 }
 
 // ============================================================================
@@ -615,6 +637,131 @@ fn addDependency(name: string, version: string) void {
     writeFile("cot.json", json_str) catch {
         eprintln("Failed to update cot.json")
     }
+}
+
+// ============================================================================
+// Dependency resolution helpers
+// ============================================================================
+
+/// Read direct dependencies from cot.json as a list of Requirements.
+fn readDirectDeps() List(Requirement) {
+    var result: List(Requirement) = .{}
+
+    var manifest = readFile("cot.json") catch {
+        return result
+    }
+
+    var root = parse(manifest)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        return result
+    }
+
+    var deps = jsonObjectGet(root, "dependencies")
+    if (deps == 0 or jsonTag(deps) != JSON_OBJECT) {
+        jsonFree(root)
+        return result
+    }
+
+    var dep_keys = jsonObjKeys(deps)
+    var i: int = 0
+    while (i < dep_keys.count) {
+        var dep_name = dep_keys.get(i)
+        var dep_range = jsonObjectGetString(deps, dep_name)
+        result.append(Requirement { name: dep_name, range: dep_range })
+        i += 1
+    }
+    jsonFree(root)
+    return result
+}
+
+/// Write cot.lock with resolved dependency information.
+fn writeLockFile(resolved: List(ResolvedDep)) void {
+    var packages = jsonObject()
+    var i: int = 0
+    while (i < resolved.count) {
+        var dep = resolved.get(i)
+        var pkg_obj = jsonObject()
+        jsonObjectPut(pkg_obj, "version", jsonString(dep.version))
+        jsonObjectPut(pkg_obj, "checksum", jsonString(dep.checksum))
+        jsonObjectPut(packages, dep.name, pkg_obj)
+        i += 1
+    }
+
+    var lock = jsonObject()
+    jsonObjectPut(lock, "version", jsonInt(1))
+    jsonObjectPut(lock, "packages", packages)
+
+    var json_str = encode(lock)
+    jsonFree(lock)
+
+    writeFile("cot.lock", json_str) catch {
+        eprintln("Warning: failed to write cot.lock")
+    }
+}
+
+/// Read resolved dependencies from cot.lock.
+fn readLockFile() List(ResolvedDep) {
+    var result: List(ResolvedDep) = .{}
+
+    var content = readFile("cot.lock") catch {
+        return result
+    }
+
+    var root = parse(content)
+    if (root == 0 or jsonTag(root) != JSON_OBJECT) {
+        return result
+    }
+
+    var packages = jsonObjectGet(root, "packages")
+    if (packages == 0 or jsonTag(packages) != JSON_OBJECT) {
+        jsonFree(root)
+        return result
+    }
+
+    var pkg_keys = jsonObjKeys(packages)
+    var i: int = 0
+    while (i < pkg_keys.count) {
+        var name = pkg_keys.get(i)
+        var pkg_obj = jsonObjectGet(packages, name)
+        var version = jsonObjectGetString(pkg_obj, "version")
+        var checksum = jsonObjectGetString(pkg_obj, "checksum")
+        result.append(ResolvedDep {
+            name: name,
+            version: version,
+            checksum: checksum,
+        })
+        i += 1
+    }
+    jsonFree(root)
+    return result
+}
+
+/// Check if the lock file is current relative to cot.json direct dependencies.
+/// Returns true if every direct dep has a locked entry whose version satisfies the range.
+fn isLockCurrent(direct: List(Requirement), locked: List(ResolvedDep)) bool {
+    var i: int = 0
+    while (i < direct.count) {
+        var req = direct.get(i)
+        // Find this package in locked deps
+        var found = false
+        var j: int = 0
+        while (j < locked.count) {
+            if (locked.get(j).name == req.name) {
+                // Check that locked version satisfies the range
+                var sv = parseSemver(locked.get(j).version)
+                if (sv) |v| {
+                    if (semverSatisfies(v, req.range)) {
+                        found = true
+                    }
+                }
+                break
+            }
+            j += 1
+        }
+        if (not found) { return false }
+        i += 1
+    }
+    return true
 }
 
 /// Get keys of a JSON object.

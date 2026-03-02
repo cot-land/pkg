@@ -47,6 +47,8 @@ struct Db {
         sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS versions (package_name TEXT NOT NULL, number TEXT NOT NULL, published TEXT NOT NULL, checksum TEXT NOT NULL, PRIMARY KEY (package_name, number), FOREIGN KEY (package_name) REFERENCES packages(name))")
 
         sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS dependencies (package_name TEXT NOT NULL, version_number TEXT NOT NULL, dep_name TEXT NOT NULL, version_req TEXT NOT NULL, PRIMARY KEY (package_name, version_number, dep_name), FOREIGN KEY (package_name, version_number) REFERENCES versions(package_name, number))")
+
+        sqliteExec(self.handle, "CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, owner TEXT NOT NULL, description TEXT NOT NULL, created TEXT NOT NULL)")
     }
 
     // ===== Package CRUD =====
@@ -232,6 +234,37 @@ struct Db {
         }
         sqlite3_finalize(stmt)
         return results
+    }
+
+    // ===== Token Auth =====
+
+    /// Store a hashed token. Returns false if hash already exists.
+    fn createToken(hash: string, owner: string, description: string, created: string) bool {
+        var stmt = sqlitePrepare(self.handle, "INSERT OR IGNORE INTO tokens (hash, owner, description, created) VALUES (?1, ?2, ?3, ?4)")
+        if (stmt == 0) { return false }
+        bindText(stmt, 1, hash)
+        bindText(stmt, 2, owner)
+        bindText(stmt, 3, description)
+        bindText(stmt, 4, created)
+        var rc = sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+        if (rc != SQLITE_DONE) { return false }
+        // Check if row was actually inserted (not ignored due to duplicate)
+        return sqlite3_changes(self.handle) > 0
+    }
+
+    /// Validate a hashed token. Returns the owner name, or null if not found.
+    fn validateToken(hash: string) ?string {
+        var stmt = sqlitePrepare(self.handle, "SELECT owner FROM tokens WHERE hash = ?1")
+        if (stmt == 0) { return null }
+        bindText(stmt, 1, hash)
+        if (sqlite3_step(stmt) != SQLITE_ROW) {
+            sqlite3_finalize(stmt)
+            return null
+        }
+        var owner = columnString(stmt, 0)
+        sqlite3_finalize(stmt)
+        return owner
     }
 }
 
@@ -444,6 +477,34 @@ test "multiple versions on one package" {
             @assertEq(pkg.versions.get(0).number, "1.0.0")
             @assertEq(pkg.versions.get(1).number, "2.0.0")
         }
+        db.close()
+    }
+}
+
+test "create and validate token" {
+    if (Db.open(":memory:")) |db| {
+        @assert(db.createToken("abc123hash", "alice", "dev token", "2026-03-01"))
+        if (db.validateToken("abc123hash")) |owner| {
+            @assertEq(owner, "alice")
+        } else {
+            @assert(false)
+        }
+        db.close()
+    }
+}
+
+test "validate missing token returns null" {
+    if (Db.open(":memory:")) |db| {
+        var result = db.validateToken("nonexistent")
+        @assert(result == null)
+        db.close()
+    }
+}
+
+test "duplicate token hash rejected" {
+    if (Db.open(":memory:")) |db| {
+        @assert(db.createToken("samehash", "alice", "first", "2026-03-01"))
+        @assert(not db.createToken("samehash", "bob", "second", "2026-03-02"))
         db.close()
     }
 }

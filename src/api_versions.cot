@@ -12,15 +12,31 @@ import "std/fs"
 import "response"
 import "request"
 import "router"
-import "registry"
+import "db"
 import "package"
 import "files"
 import "semver_check"
 
+/// Extract keys from a JSON object node (low-level pointer walk).
+fn jsonObjectKeys(obj: i64) List(string) {
+    var result: List(string) = .{}
+    var keys_p = @intToPtr(*i64, obj + 8).*
+    var k_items = @intToPtr(*i64, keys_p).*
+    var k_count = @intToPtr(*i64, keys_p + 8).*
+    var i: int = 0
+    while (i < k_count) {
+        var kptr = @intToPtr(*i64, k_items + i * 16).*
+        var klen = @intToPtr(*i64, k_items + i * 16 + 8).*
+        result.append(@string(kptr, klen))
+        i += 1
+    }
+    return result
+}
+
 /// GET /api/packages/:name/:version — get specific version metadata.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package/versions/:version.
-fn handleGetVersion(reg: *Registry, name: string, version: string) string {
-    if (reg.get(name)) |pkg| {
+fn handleGetVersion(db: *Db, name: string, version: string) string {
+    if (db.getPackage(name)) |pkg| {
         if (pkg.getVersion(version)) |ver| {
             var obj = jsonObject()
             jsonObjectPut(obj, "package", jsonString(name))
@@ -54,20 +70,20 @@ fn handleGetVersion(reg: *Registry, name: string, version: string) string {
 ///
 /// Expects JSON body with optional dependencies.
 /// Creates version metadata. File upload handled separately.
-fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Request) string {
+fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) string {
     // Validate semver — ported from JSR publish-time validation
     if (not isValidSemver(version)) {
         return badRequest("invalid semver version")
     }
 
     // Check package exists
-    if (not reg.has(name)) {
+    if (not db.has(name)) {
         return notFound()
     }
 
     // Check version doesn't already exist (immutable versions)
     // Ported from JSR's immutability check
-    if (reg.get(name)) |pkg| {
+    if (db.getPackage(name)) |pkg| {
         if (pkg.hasVersion(version)) {
             return jsonResponse(409, "{\"error\":\"version already published, versions are immutable\"}")
         }
@@ -132,7 +148,7 @@ fn handlePublishVersion(reg: *Registry, name: string, version: string, req: Requ
         dependencies: deps,
     }
 
-    if (reg.addVersion(name, ver)) {
+    if (db.addVersion(name, ver)) {
         // Store the manifest as cot.json
         if (has_manifest and @lenOf(body) > 0) {
             storePackageFile(name, version, "cot.json", body) catch {

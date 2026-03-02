@@ -4,7 +4,9 @@
 /// Simple Bearer token auth — check Authorization header.
 
 import "std/string"
+import "std/crypto"
 import "request"
+import "db"
 
 /// Extract the Bearer token from an Authorization header.
 /// Ported from Go net/http — parse "Bearer <token>" format.
@@ -17,6 +19,15 @@ fn extractBearerToken(req: Request) string {
         return substring(auth, 7, @lenOf(auth))
     }
     return ""
+}
+
+/// Validate a request's Bearer token against the database.
+/// Returns the owner name if valid, null if invalid or missing.
+fn validateRequest(database: *Db, req: Request) ?string {
+    var token = extractBearerToken(req)
+    if (@lenOf(token) == 0) { return null }
+    var hash = sha256(token)
+    return database.validateToken(hash)
 }
 
 // ============================================================================

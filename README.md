@@ -18,7 +18,9 @@ Working:
 - SHA-256 checksums on published content
 - Bearer token auth on publish/create endpoints
 - CLI tool: init, publish, add, install, remove, search, info, list, login
-- 42 inline tests passing
+- Transitive dependency resolution with semver range matching (^, ~, >=)
+- Lock file (cot.lock) for reproducible installs
+- 55 inline tests passing
 
 ## Quick Start
 
@@ -46,15 +48,17 @@ Visit `http://localhost:8080` for the web UI.
 ```bash
 pkg-cli init                  # Create cot.json
 pkg-cli publish               # Publish current package
-pkg-cli add <name>            # Add latest version as dependency
-pkg-cli add <name>@<version>  # Add specific version
-pkg-cli install               # Install all dependencies to global cache
+pkg-cli add <name>            # Add latest version as dependency (stored as ^X.Y.Z)
+pkg-cli add <name>@<version>  # Add specific version (stored as ^X.Y.Z)
+pkg-cli install               # Install all deps (uses cot.lock if current)
 pkg-cli remove <name>         # Remove dependency
 pkg-cli search <query>        # Search registry
 pkg-cli info <name>           # Show package details
 pkg-cli list                  # List dependencies
 pkg-cli login <token>         # Store auth token
 ```
+
+`pkg add` resolves transitive dependencies automatically. If `foo` depends on `bar` which depends on `baz`, all three are installed and recorded in `cot.lock`. The lock file ensures reproducible installs — `pkg install` uses it when the lock matches `cot.json`.
 
 ## API
 
@@ -117,11 +121,14 @@ cli/
   src/main.cot          CLI entry point, argument parsing
   src/commands.cot      All CLI commands
   src/http_client.cot   HTTP client for registry API calls
+  src/semver.cot        Semver parsing, comparison, range matching
+  src/resolver.cot      Transitive dependency resolution
 ```
 
 ## Testing
 
 ```bash
+# Server tests
 cot test src/router.cot        # 15 tests
 cot test src/request.cot       # 7 tests
 cot test src/response.cot      # 5 tests
@@ -129,6 +136,12 @@ cot test src/registry.cot      # 8 tests
 cot test src/search_index.cot  # 10 tests
 cot test src/semver_check.cot  # 2 tests
 cot check src/main.cot         # full type-check
+
+# CLI tests
+cd cli/
+cot test src/semver.cot        # 10 tests (semver parsing + range matching)
+cot test src/resolver.cot      # 13 tests (includes semver + resolver)
+cot check src/main.cot         # full CLI type-check
 ```
 
 ## Architecture
