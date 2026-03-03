@@ -102,47 +102,26 @@ struct Request {
         }
     }
 
-    /// Look up a header value by name.
-    /// Ported from Go net/http.Header.Get — case-sensitive lookup in "Key: Value\r\n" block.
+    /// Look up a header value by name (case-insensitive).
+    /// Ported from Go net/http.Header.Get — case-insensitive lookup in "Key: Value\r\n" block.
+    /// HTTP/2 proxies (Fly.io) lowercase all header names, so this must be case-insensitive.
     fn header(name: string) string {
         var hdrs = self.headers
-        var hlen = hdrs.len
-        var nlen = name.len
-        if (hlen == 0 or nlen == 0) { return "" }
+        if (hdrs.len == 0 or name.len == 0) { return "" }
 
-        // Scan for "name: " at start of each line
-        // Go: textproto.CanonicalMIMEHeaderKey + map lookup
-        var pos: int = 0
-        while (pos + nlen + 2 <= hlen) {
-            var at_line_start = false
-            if (pos == 0) {
-                at_line_start = true
-            } else if (hdrs[pos - 1] == '\n') {
-                at_line_start = true
-            }
+        // Lowercase everything, prepend \n so first header matches line-start search
+        var lower = "\n" ++ toLower(hdrs)
+        var needle = "\n" ++ toLower(name) ++ ": "
+        var idx = indexOf(lower, needle)
+        if (idx < 0) { return "" }
 
-            if (at_line_start) {
-                var match = true
-                var j: int = 0
-                while (j < nlen and match) {
-                    if (hdrs[pos + j] != name[j]) {
-                        match = false
-                    }
-                    j += 1
-                }
-                // Check for ": " separator after name
-                if (match and hdrs[pos + nlen] == ':' and hdrs[pos + nlen + 1] == ' ') {
-                    var val_start = pos + nlen + 2
-                    var val_end = val_start
-                    while (val_end < hlen and hdrs[val_end] != '\r' and hdrs[val_end] != '\n') {
-                        val_end += 1
-                    }
-                    return substring(hdrs, val_start, val_end)
-                }
-            }
-            pos += 1
+        // Value starts after needle. Offset -1 to map back to original hdrs.
+        var val_start = idx + needle.len - 1
+        var val_end = val_start
+        while (val_end < hdrs.len and hdrs[val_end] != '\r' and hdrs[val_end] != '\n') {
+            val_end += 1
         }
-        return ""
+        return substring(hdrs, val_start, val_end)
     }
 
     /// Get the Content-Length header as an integer.
@@ -238,6 +217,16 @@ test "header lookup" {
     @assertEq(req.header("Host"), "cot.land")
     @assertEq(req.header("Content-Type"), "application/json")
     @assertEq(req.header("Missing"), "")
+}
+
+test "header lookup case-insensitive" {
+    // HTTP/2 proxies (Fly.io) lowercase all header names
+    var req = Request.parse("GET / HTTP/1.1\r\nhost: cot.land\r\ncontent-type: application/json\r\nauthorization: Bearer abc123\r\n\r\n")
+    @assertEq(req.header("Host"), "cot.land")
+    @assertEq(req.header("Content-Type"), "application/json")
+    @assertEq(req.header("Authorization"), "Bearer abc123")
+    @assertEq(req.header("authorization"), "Bearer abc123")
+    @assertEq(req.header("AUTHORIZATION"), "Bearer abc123")
 }
 
 test "parse query string" {

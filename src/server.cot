@@ -80,10 +80,12 @@ struct Server {
         }
         total = n
 
-        // Find end of headers (\r\n\r\n) to determine Content-Length
-        var hdr_end = findHeaderEnd(buf, total)
-        if (hdr_end > 0) {
-            var content_length = extractContentLength(buf, hdr_end)
+        // Convert to string and find end of headers (\r\n\r\n)
+        var raw = @string(buf, total)
+        var hdr_end = indexOf(raw, "\r\n\r\n")
+        if (hdr_end >= 0) {
+            var headers = substring(raw, 0, hdr_end)
+            var content_length = extractContentLength(headers)
             if (content_length > 0) {
                 var body_start = hdr_end + 4
                 var need = body_start + content_length
@@ -125,60 +127,21 @@ struct Server {
     }
 }
 
-/// Find the byte offset of \r\n\r\n in a raw buffer.
-/// Returns the offset of the first \r, or -1 if not found.
-/// Ported from Go textproto — scan for blank line separating headers from body.
-fn findHeaderEnd(buf: i64, len: int) int {
-    var i: int = 0
-    while (i < len - 3) {
-        if (@intToPtr(*u8, buf + i).* == 13
-            and @intToPtr(*u8, buf + i + 1).* == 10
-            and @intToPtr(*u8, buf + i + 2).* == 13
-            and @intToPtr(*u8, buf + i + 3).* == 10) {
-            return i
-        }
-        i += 1
-    }
-    return 0 - 1
-}
+/// Extract Content-Length value from a headers string.
+/// Case-insensitive because HTTP/2 proxies (Fly.io) lowercase all header names.
+/// Ported from Go textproto — scan for Content-Length header value.
+fn extractContentLength(headers: string) int {
+    // Prepend \n so first header is also matched by line-start search
+    var lower = "\n" ++ toLower(headers)
+    var idx = indexOf(lower, "\ncontent-length: ")
+    if (idx < 0) { return 0 }
 
-/// Extract Content-Length value from raw header bytes.
-/// Scans for "Content-Length: " in the buffer up to hdr_end.
-/// Returns 0 if not found.
-fn extractContentLength(buf: i64, hdr_end: int) int {
-    // Search for "Content-Length: " (case-sensitive, matching curl/browsers)
-    var needle = "Content-Length: "
-    var nlen = needle.len
-    var i: int = 0
-    while (i < hdr_end - nlen) {
-        // Check if we're at start of line (pos 0 or after \n)
-        var at_line = false
-        if (i == 0) {
-            at_line = true
-        } else if (@intToPtr(*u8, buf + i - 1).* == 10) {
-            at_line = true
-        }
-        if (at_line) {
-            var match = true
-            var j: int = 0
-            while (j < nlen and match) {
-                if (@intToPtr(*u8, buf + i + j).* != needle[j]) {
-                    match = false
-                }
-                j += 1
-            }
-            if (match) {
-                // Parse digits after "Content-Length: "
-                var val: int = 0
-                var pos = i + nlen
-                while (pos < hdr_end and @intToPtr(*u8, buf + pos).* >= 48 and @intToPtr(*u8, buf + pos).* <= 57) {
-                    val = val * 10 + @intCast(int, @intToPtr(*u8, buf + pos).*) - 48
-                    pos += 1
-                }
-                return val
-            }
-        }
-        i += 1
+    // Digits start after "content-length: ", offset -1 to map back to original
+    var pos = idx + 17 - 1
+    var val: int = 0
+    while (pos < headers.len and headers[pos] >= '0' and headers[pos] <= '9') {
+        val = val * 10 + @intCast(int, headers[pos]) - 48
+        pos += 1
     }
-    return 0
+    return val
 }
