@@ -16,9 +16,11 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
           echo "$HOME/.cot/bin" >> $GITHUB_PATH
+        env:
+          COT_VERSION: "0.3.5"
 
       - name: Install stdlib
-        run: git clone https://github.com/cotlang/std.git stdlib
+        run: git clone --depth 1 https://github.com/cotlang/std.git stdlib
 
       - name: Check types
         run: cot check src/main.cot
