@@ -9,6 +9,7 @@
 
 import "std/os"
 import "std/sys"
+import "std/http"
 import "std/string"
 import "std/log"
 import "std/fs"
@@ -95,6 +96,7 @@ fn main() void {
 
     // Initialize database
     if (Db.open("data/registry.db")) |db| {
+        var sdb = SafeDb.wrap(db)
         info("cot.land registry v${VERSION}")
 
         // Create server
@@ -125,16 +127,42 @@ fn main() void {
             exit(1)
         }
 
-        // Accept loop
-        // Ported from Go http.Server.Serve — accept connections and dispatch
-        while (true) {
-            if (srv.acceptOne()) |sreq| {
-                var resp = dispatch(&db, sreq)
-                var status = responseStatus(resp)
-                info("${sreq.req.method} ${sreq.req.path} ${status}")
-                srv.respond(sreq.client_fd, resp)
+        // Extract pointers before loop — spawn captures by value,
+        // so we capture the pointer (address), not the struct.
+        var srv_ptr = &srv
+        var sdb_ptr = &sdb
+
+        // Accept loop — spawn-per-connection
+        // Ported from Go http.Server.Serve → go c.serve(connCtx)
+        while (not isShuttingDown()) {
+            var client_fd = srv_ptr.accept()
+            if (client_fd < 0) { continue }
+
+            // Backpressure: reject when at capacity
+            if (@atomicLoad(&active_connections) >= MAX_CONNECTIONS) {
+                srv_ptr.respond(client_fd, serverError())
+                continue
+            }
+            @atomicAdd(&active_connections, 1)
+
+            spawn {
+                if (srv_ptr.readRequest(client_fd)) |sreq| {
+                    var resp = dispatch(sdb_ptr, sreq)
+                    var status = responseStatus(resp)
+                    info("${sreq.req.method} ${sreq.req.path} ${status}")
+                    srv_ptr.respond(sreq.client_fd, resp)
+                } else {
+                    socketClose(client_fd)
+                }
+                @atomicAdd(&active_connections, 0 - 1)
             }
         }
+
+        // Drain active connections before closing
+        info("shutting down, draining connections")
+        while (@atomicLoad(&active_connections) > 0) { }
+        srv.close()
+        sdb.close()
     } else {
         logError("failed to open database")
         exit(1)
@@ -144,7 +172,7 @@ fn main() void {
 /// Dispatch a matched request to the appropriate handler.
 /// Uses handler IDs from the router match — switch-based dispatch
 /// instead of function pointers.
-fn dispatch(db: *Db, sreq: ServerRequest) string {
+fn dispatch(db: *SafeDb, sreq: ServerRequest) string {
     var req = sreq.req
     var route = sreq.route
 

@@ -35,7 +35,7 @@ fn jsonObjectKeys(obj: i64) List(string) {
 
 /// GET /api/packages/:name/:version — get specific version metadata.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package/versions/:version.
-fn handleGetVersion(db: *Db, name: string, version: string) string {
+fn handleGetVersion(db: *SafeDb, name: string, version: string) string {
     if (db.getPackage(name)) |pkg| {
         if (pkg.getVersion(version)) |ver| {
             var obj = jsonObject()
@@ -70,7 +70,7 @@ fn handleGetVersion(db: *Db, name: string, version: string) string {
 ///
 /// Expects JSON body with optional dependencies.
 /// Creates version metadata. File upload handled separately.
-fn handlePublishVersion(db: *Db, name: string, version: string, req: Request) string {
+fn handlePublishVersion(db: *SafeDb, name: string, version: string, req: Request) string {
     // Validate semver — ported from JSR publish-time validation
     if (not isValidSemver(version)) {
         return badRequest("invalid semver version")

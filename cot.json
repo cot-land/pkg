@@ -4,5 +4,5 @@
   "main": "src/main.cot",
   "safe": true,
   "c_sources": ["vendor/sqlite3.c"],
-  "c_flags": ["-DSQLITE_OMIT_LOAD_EXTENSION", "-DSQLITE_THREADSAFE=0"]
+  "c_flags": ["-DSQLITE_OMIT_LOAD_EXTENSION", "-DSQLITE_THREADSAFE=2"]
 }

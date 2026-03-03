@@ -12,7 +12,7 @@ import "package"
 
 /// GET /api/search?q=term — search packages by keyword.
 /// Ported from JSR GET /api/packages (with search query parameter).
-fn handleSearch(db: *Db, query: string) string {
+fn handleSearch(db: *SafeDb, query: string) string {
     var results = db.search(query)
 
     // Build JSON response

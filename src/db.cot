@@ -10,6 +10,7 @@ import "std/sqlite"
 import "std/string"
 import "std/list"
 import "std/log"
+import "std/thread"
 import "package"
 import "search_index"
 
@@ -265,6 +266,88 @@ struct Db {
         var owner = columnString(stmt, 0)
         sqlite3_finalize(stmt)
         return owner
+    }
+}
+
+/// Thread-safe database wrapper — Mutex-serialized access to Db.
+/// Ported from Go's sync.Mutex pattern for protecting shared state.
+struct SafeDb {
+    db: Db,
+    mtx: Mutex,
+
+    static fn wrap(db: Db) SafeDb {
+        return SafeDb {
+            db: db,
+            mtx: Mutex.init(),
+        }
+    }
+
+    fn has(name: string) bool {
+        self.mtx.lock()
+        var result = self.db.has(name)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn createPackage(name: string, description: string, author: string) bool {
+        self.mtx.lock()
+        var result = self.db.createPackage(name, description, author)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn getPackage(name: string) ?Package {
+        self.mtx.lock()
+        var result = self.db.getPackage(name)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn addVersion(name: string, ver: Version) bool {
+        self.mtx.lock()
+        var result = self.db.addVersion(name, ver)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn allNames() List(string) {
+        self.mtx.lock()
+        var result = self.db.allNames()
+        self.mtx.unlock()
+        return result
+    }
+
+    fn count() int {
+        self.mtx.lock()
+        var result = self.db.count()
+        self.mtx.unlock()
+        return result
+    }
+
+    fn search(query: string) List(SearchResult) {
+        self.mtx.lock()
+        var result = self.db.search(query)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn createToken(hash: string, owner: string, description: string, created: string) bool {
+        self.mtx.lock()
+        var result = self.db.createToken(hash, owner, description, created)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn validateToken(hash: string) ?string {
+        self.mtx.lock()
+        var result = self.db.validateToken(hash)
+        self.mtx.unlock()
+        return result
+    }
+
+    fn close() void {
+        self.db.close()
+        self.mtx.destroy()
     }
 }
 

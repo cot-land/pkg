@@ -13,7 +13,7 @@ import "package"
 
 /// GET /api/packages — list all packages.
 /// Ported from JSR GET /api/scopes/:scope/packages.
-fn handleListPackages(db: *Db) string {
+fn handleListPackages(db: *SafeDb) string {
     var names = db.allNames()
     var arr = jsonArray()
     var i: int = 0
@@ -39,7 +39,7 @@ fn handleListPackages(db: *Db) string {
 
 /// GET /api/packages/:name — get package detail.
 /// Ported from JSR GET /api/scopes/:scope/packages/:package.
-fn handleGetPackage(db: *Db, name: string) string {
+fn handleGetPackage(db: *SafeDb, name: string) string {
     if (db.getPackage(name)) |pkg| {
         return jsonResponse(200, pkg.toJson())
     }
@@ -48,7 +48,7 @@ fn handleGetPackage(db: *Db, name: string) string {
 
 /// POST /api/packages — create a new package.
 /// Ported from JSR POST /api/scopes/:scope/packages.
-fn handleCreatePackage(db: *Db, req: Request) string {
+fn handleCreatePackage(db: *SafeDb, req: Request) string {
     var body = req.body
     if (body.len == 0) {
         return badRequest("empty body")
