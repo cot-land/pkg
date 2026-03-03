@@ -1,0 +1,40 @@
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Cot compiler
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
+          echo "$HOME/.cot/bin" >> $GITHUB_PATH
+
+      - name: Install stdlib
+        run: git clone https://github.com/cotlang/std.git stdlib
+
+      - name: Check types
+        run: cot check src/main.cot
+
+      - name: Run tests
+        run: |
+          cot test src/db.cot
+          cot test src/router.cot
+          cot test src/request.cot
+          cot test src/response.cot
+          cot test src/api_auth.cot
+
+      - name: Build for Linux x64
+        run: cot build src/main.cot -o pkg --target=amd64-linux
+
+      - name: Deploy to Fly.io
+        uses: superfly/flyctl-action@v2
+        with:
+          args: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
